@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Auto, [switch]$Run, [string]$Parts = '', [switch]$Analyze, [switch]$CheckOnly, [string]$RunId = '', [string]$AppsFile = '', [string]$WingetFile = '', [string]$DirectFile = '', [string]$Monitor = '', [switch]$DeskArrange, [string]$Topology = '', [int]$Delay = 0, [switch]$Silent, [switch]$Install, [string]$JobFile = '', [switch]$Backup, [switch]$FleetPoll, [string]$FirstLogon = '', [switch]$NetDiag, [switch]$TbSync, [switch]$WinRepair, [switch]$NetDeep, [string]$DeepOpts = '', [switch]$FullBackup, [switch]$FullRepair, [switch]$NetDoc, [switch]$Sign, [string]$SignOpts = '', [string]$ChocoFile = '')
 
-$AppVersion = '13.7'
+$AppVersion = '13.7.1'
 $DefaultUpdateSource = 'github:rhedv42-sudo/pc-tools@stable'
 # Portabel (USB-Stick): Datei portable.txt neben dem Skript -> Einstellungen/Protokolle im Ordner Daten auf dem Stick
 $Script:IsPortable = [bool]($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'portable.txt')))
@@ -1611,6 +1611,8 @@ function Read-PflegeConfig {
         } catch { }
     }
     if (-not [string]$def.Settings.UpdateSource) { $def.Settings.UpdateSource = $DefaultUpdateSource }
+    # 13.7.1: Umzug auf das öffentliche Open-Source-Repository (Zweig stable, kein Token mehr nötig)
+    if ([string]$def.Settings.UpdateSource -match '^github:\s*rhedv42-sudo/pc-pflege(@[\w\.\-/]+)?\s*$') { $def.Settings.UpdateSource = 'github:rhedv42-sudo/pc-tools@stable' }
     return $def
 }
 function Save-PflegeConfig($Cfg) {
@@ -20922,6 +20924,7 @@ $pageSecurity = New-Page 'Sicherheit' 'Alle Schutzfunktionen dieses PCs auf eine
 
 # ---------------------------------------------------------------- Handbuch (wird mit jeder Version gepflegt)
 $ManualNews = @(
+    'Version 13.7.1: PC-Tools ist jetzt Open Source (Apache 2.0) - https://github.com/rhedv42-sudo/pc-tools. Updates kommen ab jetzt aus dem öffentlichen Repository (Zweig stable, Downloads unter Releases), ein GitHub-Token ist nicht mehr nötig. Bestehende Installationen werden automatisch umgestellt.',
     'Version 13.7: Neu "Nicht genutzte Programme" (Übersicht und PC-Reiniger > Programme): findet Programme, die seit 90 Tagen bis 2 Jahren nicht gestartet wurden (Windows-Spuren Prefetch, BAM und UserAssist), schützt Laufzeiten, Treiber, Sicherheits-, Sicherungs-, VPN-, Fernwartungs-, Office- und Druckerprogramme und entfernt die angehakten nach EINER Bestätigung still nacheinander - mit Wiederherstellungspunkt, Resten (Ordner in den Papierkorb, Registry mit Sicherung) und verwaisten Verknüpfungen. Ninite Pro ist nicht mehr Teil des Downloads - wer eine Lizenz hat, kopiert NinitePro.exe nach C:\ProgramData\PCPflege (Anleitung: Ninite-Pro-einbinden.txt).',
     'Version 13.6: Netzwerk dokumentieren erkennt jetzt die gesamte Netzwerk-Infrastruktur - Router (auch weitere Router und Doppel-NAT), Firewalls (Sophos, Fortinet, pfSense/OPNsense, Securepoint, Zyxel, LANCOM ...), Switches, Access Points (UniFi, Omada, Aruba, LANCOM, MikroTik, FRITZ!Repeater, Mesh ...) und WLAN-Controller. Quellen: Hersteller, Weboberfläche, UPnP, SNMP (Modell, Firmware, Standort, Kontakt, Laufzeit), Verwaltungsports und die WLAN-Sender, die zur Geräte-MAC passen. Neues Berichtskapitel "Netzwerk-Infrastruktur" mit WLAN-Abdeckung je Access Point und dem Weg ins Internet; neue Befunde: SNMP mit Standard-Community, weiterer Router, Doppel-NAT.',
     'Version 13.5: Zwei neue Seiten. "WLAN optimieren": Analyse von Verbindung, Signal (dBm), Band, Kanal, Funkstandard, Sicherheit, Nachbarnetzen, Energiesparen und den versteckten Treiber-Einstellungen mit Bewertung; "WLAN optimieren" stellt Energiesparen, 5/6-GHz-Bevorzugung, Sendeleistung, MIMO, Kanalbreite, Funkstandard und Roaming mit Sicherung ein (Rückgängig); Stabilitätstest, WLAN neu verbinden, WLAN-Bericht von Windows und der WLAN-Rundgang (Empfang je Raum messen). "Netzwerk dokumentieren": erfasst alle Geräte (Art, IP, MAC, Hersteller, 59 Dienste, Weboberfläche, Anschluss), Smart Home und Gebäudeautomation (KNX IP mit Secure-Prüfung und passivem Busmonitor, Bonjour/mDNS, UPnP, Shelly, Tasmota, Hue, Node-RED, MQTT, Homematic, ESPHome, Matter/Thread, Home Assistant per Token), Router und - mit Anmeldung - die FRITZ!Box (alle Geräte auch offline, Portfreigaben, WPS, Gastnetz, Fernzugang, FRITZ!OS-Update, DSL-Werte), die Erreichbarkeit aus dem Internet (Portfreigaben, UPnP, Fernzugang, Carrier-NAT, IPv6, Shodan InternetDB mit CVEs), WLAN und diesen PC. Bewertet Schwachstellen (kritisch bis Info, Note A-E), vergleicht mit der letzten Erfassung, speichert Raum/Zweck/Notiz je Gerät, exportiert als Excel-Liste und erstellt einen PDF-Bericht mit Logo, Netzplan, Inventar, Schwachstellen, Maßnahmenplan und Freigabe-/Unterschriftenfeld. Auf Wunsch jeden Montag automatisch mit Meldung bei neuen Geräten oder Schwachstellen.',
