@@ -1801,14 +1801,15 @@ namespace PcTools {
             EventManager.RegisterClassHandler(typeof(FrameworkElement), FrameworkElement.ToolTipOpeningEvent, new ToolTipEventHandler(OnTip), true);
         }
         static ConditionalWeakTable<object, object> done = new ConditionalWeakTable<object, object>();
+        static ConditionalWeakTable<object, object> wins = new ConditionalWeakTable<object, object>();
         static void OnTip(object sender, ToolTipEventArgs e) {
             var fe = sender as FrameworkElement; if (fe == null || !Active) return;
             var s = fe.ToolTip as string; if (s != null) { var t = T(s); if (t != s) fe.ToolTip = t; }
         }
         static void OnWinLoaded(object sender, RoutedEventArgs e) {
             var w = sender as Window; if (w == null || !Active) return;
-            object o; if (done.TryGetValue(w, out o)) return;
-            done.Add(w, true);
+            object o; if (wins.TryGetValue(w, out o)) return;
+            wins.Add(w, true);
             try { Walk(w); } catch { }
             var tm = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background, w.Dispatcher) { Interval = TimeSpan.FromMilliseconds(350) };
             tm.Tick += (s2, e2) => { tm.Stop(); try { if (Active) Walk(w); } catch { } };
@@ -1886,12 +1887,15 @@ namespace PcTools {
                 var s = tb.ToolTip as string; if (s != null) { var t2 = T(s); if (t2 != s) tb.ToolTip = t2; }
             } finally { busy = false; }
         }
-        static void DoInlines(InlineCollection col) {
+        static void CollectRuns(InlineCollection col, List<Run> runs) {
             foreach (var il in col) {
-                var r = il as Run;
-                if (r != null) { if (!BindingOperations.IsDataBound(r, Run.TextProperty) && !string.IsNullOrEmpty(r.Text)) { var t = T(r.Text); if (t != r.Text) r.Text = t; } continue; }
-                var sp = il as Span; if (sp != null) DoInlines(sp.Inlines);
+                var r = il as Run; if (r != null) { runs.Add(r); continue; }
+                var sp = il as Span; if (sp != null) CollectRuns(sp.Inlines, runs);
             }
+        }
+        static void DoInlines(InlineCollection col) {
+            var runs = new List<Run>(); CollectRuns(col, runs);
+            foreach (var r in runs) { if (!BindingOperations.IsDataBound(r, Run.TextProperty) && !string.IsNullOrEmpty(r.Text)) { var t = T(r.Text); if (t != r.Text) r.Text = t; } }
         }
         static void Hook(DependencyObject d, DependencyProperty p, Type t) {
             object o;
