@@ -59,6 +59,15 @@ $tbs.Clear(); Get-Tbs $w.FindName('C2'); Check ([string](@($tbs) -join '|')) 'Sp
 Check ([string]$w.FindName('G1').Columns[0].Header) 'Column A' 'Tabellenkopf'
 $tbs.Clear(); Get-Tbs $w.FindName('G1'); Check ([string](@($tbs) -contains 'Critical')) 'True' 'Tabellenzelle'
 $w.Close()
+# Taskleistensymbol (C#) übersetzbar und aufrufbar
+$m = [regex]::Match($src, "(?s)@'\r?\n(using System;\r?\nusing System.Runtime.InteropServices;\r?\nnamespace PCPflege \{\r?\n    public static class TaskbarIcon.*?)\r?\n'@")
+if (-not $m.Success) { Write-Host '::error::TaskbarIcon-Quelltext nicht gefunden'; $fail++ } else {
+    Add-Type -TypeDefinition $m.Groups[1].Value
+    $w2 = New-Object Windows.Window; $w2.Width = 100; $w2.Height = 100; $w2.Left = -3000; $w2.ShowInTaskbar = $false
+    $w2.Show(); $h = (New-Object Windows.Interop.WindowInteropHelper $w2).Handle
+    [PCPflege.TaskbarIcon]::Apply($h, (Join-Path $root 'PCPflege.ico'), 'RHEDV.PCPflege.Test', 'cmd.exe', 'PC-Tools'); $w2.Close()
+    [void]$script:okList.Add('Taskleistensymbol')
+}
 # Sprachdateien prüfen
 foreach ($f in @(Get-ChildItem (Join-Path $root 'lang') -Filter '*.json' -ErrorAction SilentlyContinue)) {
     Add-Type -AssemblyName System.Web.Extensions

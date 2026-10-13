@@ -30440,6 +30440,52 @@ if ($icoPath) {
         if ($side) { $side.Source = $bigFrame }
         $window.Add_Loaded({ try { $sl = $ui.Tabs.Template.FindName('SideLogo', $ui.Tabs); if ($sl -and -not $sl.Source) { $sl.Source = $bigFrame } } catch { } })
     } catch { }
+    # Taskleiste: Symbol in allen Größen direkt setzen und für angeheftete Einträge hinterlegen (sonst zeigt Windows teils ein leeres/falsches Symbol)
+    try {
+        if (-not ('PCPflege.TaskbarIcon' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace PCPflege {
+    public static class TaskbarIcon {
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr LoadImage(IntPtr h, string name, uint type, int cx, int cy, uint load);
+        [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+        [DllImport("user32.dll")] static extern int GetSystemMetrics(int i);
+        [DllImport("shell32.dll")] static extern int SHGetPropertyStoreForWindow(IntPtr hwnd, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out IPropertyStore ps);
+        [ComImport, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IPropertyStore { int GetCount(out uint c); int GetAt(uint i, out PKey k); int GetValue(ref PKey k, out PropVar v); int SetValue(ref PKey k, ref PropVar v); int Commit(); }
+        [StructLayout(LayoutKind.Sequential, Pack = 4)] struct PKey { public Guid fmtid; public uint pid; public PKey(Guid g, uint p) { fmtid = g; pid = p; } }
+        [StructLayout(LayoutKind.Explicit)] struct PropVar { [FieldOffset(0)] public ushort vt; [FieldOffset(8)] public IntPtr p; [FieldOffset(16)] public IntPtr p2; }
+        static readonly Guid AppUserModel = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3");
+        static void Set(IPropertyStore ps, uint pid, string val) {
+            if (string.IsNullOrEmpty(val)) return;
+            var k = new PKey(AppUserModel, pid); var v = new PropVar { vt = 31, p = Marshal.StringToCoTaskMemUni(val) };
+            try { ps.SetValue(ref k, ref v); } finally { Marshal.FreeCoTaskMem(v.p); }
+        }
+        public static void Apply(IntPtr hwnd, string ico, string appId, string cmd, string name) {
+            IntPtr sm = LoadImage(IntPtr.Zero, ico, 1, GetSystemMetrics(49), GetSystemMetrics(50), 0x10);
+            IntPtr bg = LoadImage(IntPtr.Zero, ico, 1, GetSystemMetrics(11), GetSystemMetrics(12), 0x10);
+            if (sm != IntPtr.Zero) SendMessage(hwnd, 0x80, IntPtr.Zero, sm);
+            if (bg != IntPtr.Zero) SendMessage(hwnd, 0x80, new IntPtr(1), bg);
+            Guid iid = new Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"); IPropertyStore ps;
+            if (SHGetPropertyStoreForWindow(hwnd, ref iid, out ps) == 0 && ps != null) {
+                Set(ps, 5, appId); Set(ps, 2, cmd); Set(ps, 4, name); Set(ps, 3, ico + ",0");
+                ps.Commit(); Marshal.ReleaseComObject(ps);
+            }
+        }
+    }
+}
+'@
+        }
+        $script:IcoForTaskbar = $icoPath
+        $window.Add_SourceInitialized({
+            try {
+                $h = (New-Object Windows.Interop.WindowInteropHelper $window).Handle
+                $cmd = '"{0}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{1}"' -f (Join-Path $PSHOME 'powershell.exe'), $PSCommandPath
+                [PCPflege.TaskbarIcon]::Apply($h, $script:IcoForTaskbar, 'RHEDV.PCPflege', $cmd, 'PC-Tools')
+            } catch { }
+        })
+    } catch { }
 }
 Sync-PflegeFiles
 # Erster Start: Verknüpfungen auf dem Desktop und im Startmenü anlegen
