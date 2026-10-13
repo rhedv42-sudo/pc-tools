@@ -12,6 +12,8 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -50,9 +52,22 @@ jobs:
         shell: pwsh
         run: Copy-Item signed/PCPflege.ps1 PCPflege.ps1 -Force
 
+      - name: Starter PC-Tools.exe bauen
+        shell: pwsh
+        run: ./launcher/Build-Launcher.ps1 -Version '${{ steps.ver.outputs.version }}' -Out dist
+
       - name: Pakete bauen
         shell: pwsh
         run: ./build/Build-Packages.ps1 -Out dist
+
+      - name: Installationsprogramm bauen (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { choco install innosetup -y --no-progress | Out-Null; $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1 }
+          & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" "/DSrcDir=$PWD" "/DOutDir=$PWD\dist" installer\PC-Tools.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup fehlgeschlagen' }
+
 
       - name: GitHub Release erstellen
         uses: softprops/action-gh-release@v2
@@ -62,6 +77,7 @@ jobs:
           target_commitish: ${{ github.sha }}
           files: |
             dist/*.zip
+            dist/*.exe
             dist/version.json
             PCPflege.ps1
 
@@ -73,6 +89,26 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           Copy-Item dist/version.json version.json -Force
           git checkout -B stable
-          git add -f PCPflege.ps1 version.json
+          git add -f PCPflege.ps1 version.json lang
           git commit -m "Release v${{ steps.ver.outputs.version }}" --allow-empty
           git push -f origin stable
+
+  # ---- Linux-Ausgabe: tar.gz + .deb auf Ubuntu bauen und an dasselbe Release hängen
+  linux:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tests und Pakete
+        run: |
+          cd linux
+          PCTOOLS_TEST_ALLOW_ROOT=1 python3 -m unittest discover -s tests
+          sh build/build-packages.sh
+          ls -la dist
+      - name: An das Release anhängen
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.release.outputs.version }}
+          files: |
+            linux/dist/*.tar.gz
+            linux/dist/*.deb

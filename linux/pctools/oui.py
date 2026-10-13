@@ -1,0 +1,187 @@
+"""Hersteller-Erkennung aus MAC-Adressen (OUI = erste 3 Bytes).
+
+Eingebaut ist eine kleine Liste verbreiteter Hersteller im Heim- und Büronetz.
+Ist auf dem System eine vollständige Liste vorhanden (ieee-data, hwdata, nmap,
+wireshark), wird zusätzlich diese genutzt.
+"""
+import os
+import re
+import threading
+
+# Hersteller -> Liste von OUI-Präfixen (hex, ohne Trennzeichen)
+_BUILTIN = {
+    "Apple": "000393 000A27 000A95 001124 0016CB 0017F2 0019E3 001B63 001CB3 001D4F 001E52 001EC2 001F5B 001FF3 "
+             "0021E9 002241 002312 002332 00236C 0023DF 002436 002500 00254B 0025BC 002608 00264A 0026B0 0026BB "
+             "003065 0050E4 041E64 0C74C2 101C0C 10DDB1 14109F 182032 1C1AC0 28CFDA 28E02C 34159E 3C0754 3C15C2 "
+             "40A6D9 442A60 5855CA 5C969D 60FACD 64B9E8 6C4008 70CD60 70DEE2 7831C1 78CA39 7C6D62 7CC3A1 80E650 "
+             "843835 88C663 8C2DAA 8C8590 90B21F 9801A7 98FE94 A45E60 A4B197 A8667F AC87A3 ACBC32 B8098A B8E856 "
+             "BC52B7 C82A14 C8BCC8 D023DB D49A20 D89E3F D8A25E DC2B61 E0F847 F0B479 F0D1A9 F45C89 F81EDF",
+    "Samsung": "0000F0 0007AB 001247 0015B9 001632 0017C9 001A8A 001D25 001EE1 002119 00214C 0023D6 0024E9 002567 "
+               "08D42B 1C62B8 2C4401 30CDA7 34145F 38AA3C 5001BB 549B12 5CF6DC 6C2F2C 78F7BE 8425DB 8C71F8 94350A "
+               "9852B1 A00798 B47443 BC20A4 C819F7 CC07AB D022BE E4121D E8508B F025B7 F4D9FB",
+    "Intel": "0016EA 0018DE 001B21 001CBF 001DE0 001E64 001E67 001F3B 00215C 0022FA 002314 0024D7 00270E 3413E8 "
+             "3C970E 4C3488 5CC5D4 606720 7C5CF8 8086F2 88532E 9C4E36 A0A8CD A4C3F0 F81654 F8633F",
+    "AVM (FRITZ!)": "00040E 2C3AFD 3431C4 3810D5 444E6D 5C4979 74427F 7CFF4D 989BCB 9CC7A6 BC0543 C80E14 CCCE1E "
+                    "DC396F E0286D E8DF70",
+    "TP-Link": "001D0F 0023CD 002586 14CC20 1C3BF3 1C61B4 30B5C2 3C846A 50C7BF 50D4F7 54C80F 5C628B 60E327 645601 "
+               "6466B3 74DA88 7844FD 98DAC4 98DED0 A42BB0 AC84C6 B0487A B04E26 C025E9 C46E1F D80D17 E894F6 EC086B "
+               "F4F26D F81A67",
+    "Ubiquiti": "00156D 0418D6 18E829 245A4C 24A43C 44D9E7 687251 68D79A 7483C2 74ACB9 788A20 802AA8 B4FBE4 "
+                "DC9FDB E063DA F09FC2 FCECDA",
+    "Raspberry Pi": "28CDC1 2CCF67 B827EB D83ADD DCA632 E45F01",
+    "Espressif (ESP/IoT, z. B. Shelly, Tasmota)": "083AF2 08B61F 0C8B95 10521C 18FE34 240AC4 246F28 24A160 24D7EB "
+                "2C3AE8 30AEA4 34865D 3C6105 3C71BF 40F520 4827E2 485519 4C11AE 58BF25 5CCF7F 600194 68C63A 70039F "
+                "7C9EBD 7CDFA1 840D8E 84CCA8 8CAAB5 8CCE4E 9097D5 943CC6 94B97E 98F4AB A020A6 A0764E A4CF12 A848FA "
+                "ACD074 B4E62D B8D61A BCDDC2 C049EF C44F33 C82B96 C8C9A3 CC50E3 D4D4DA D8A01D DC4F22 E09806 E868E7 "
+                "E8DB84 ECFABC",
+    "Synology": "001132 9009D0",
+    "QNAP": "00089B 245EBE",
+    "Netgear": "00095B 000FB5 00146C 001B2F 001E2A 001F33 00223F 0024B2 0026F2 204E7F 2C3033 30469A 4494FC "
+               "6CB0CE 744401 9C3DCF A021B7 A040A0 C03F0E C40415 E091F5 E4F4C6",
+    "Cisco": "00000C 000142 000163 0001C9 000C85 001A2F 0021A0 58AC78",
+    "Cisco Meraki": "00180A 881544 E0553D",
+    "Linksys": "000625 000C41 000E08 000F66 001217 001310 0014BF 0016B6 001839 0018F8 001A70 001C10 001D7E "
+               "001EE5 002129 00226B 002369 00259C 20AA4B 48F8B3 586D8F C0C1C0",
+    "D-Link": "00055D 000D88 000F3D 001195 001346 0015E9 00179A 001B11 001CF0 001E58 002191 0022B0 1C7EE5 "
+              "28107B 340804 5CD998 78542E 84C9B2 9094E4 B8A386 C0A0BB C8BE19 CCB255 E46F13 F07D68 FC7516",
+    "Zyxel": "001349 00A0C5 4C9EFF 5CF4AB B0B2DC BCCF4F FCF528",
+    "MikroTik": "000C42 085531 18FD74 2CC81B 48A98A 4C5E0C 64D154 6C3B6B 744D28 B869F4 CC2DE0 D4CA6D DC2C6E E48D8C",
+    "Huawei": "001882 00259E 00E0FC 0819A6 101B54 20F3A3 4C1FCC 5C7D5E 70723C 80B686 84A8E4 AC853D E0247F F48E92",
+    "ZTE": "0019C6 001E73 002293",
+    "Xiaomi": "009EC8 0C1DAF 102AB3 286C07 34CE00 50EC50 584498 640980 64B473 7811DC 7C1DD9 8CBEBE 9C99A0 "
+              "A086C6 ACF7F3 C40BCB D4970B F48B32 F8A45F FC64BA",
+    "Google": "001A11 20DFB9 3C5AB4 44070B 48D6D5 546009 A47733 D86C63 F4F5D8 F4F5E8 F88FCA",
+    "Google Nest": "18B430 641666",
+    "Amazon": "0C47C9 10AE60 18742E 34D270 38F73D 40B4CD 44650D 50DCE7 6C5697 74C246 84D6D0 8871E5 A002DC "
+              "AC63BE B47C9C F0272D F0D2F1 FC65DE",
+    "Sonos": "000E58 347E5C 48A6B8 5CAAFD 78282C 949F3E B8E937 F0F6C1",
+    "Sony": "0013A9 001A80 0024BE 3C0771 78843C AC9B0A FC0FE6",
+    "Sony Interactive (PlayStation)": "0CFE45 709E29 F8461C",
+    "LG Electronics": "0005C9 001C62 001E75 001F6B 0022A9 002483 0025E5 0026E2 10F96F 2C54CF 34FCEF 3CBDD8 "
+                      "58A2B5 64BC0C 6CD032 78F882 88C9D0 A816B2 C4366C CC2D8C E85B5B F8A9D0",
+    "Microsoft": "0003FF 000D3A 00125A 0017FA 001DD8 0050F2 281878 3C8375 485073 7C1E52 7CED8D 985FD3 B4AE2B C83F26",
+    "Microsoft Hyper-V (virtuell)": "00155D",
+    "VMware (virtuell)": "000569 000C29 001C14 005056",
+    "VirtualBox (virtuell)": "080027",
+    "QEMU/KVM (virtuell)": "525400",
+    "Xen (virtuell)": "00163E",
+    "Parallels (virtuell)": "001C42",
+    "Dell": "000874 000BDB 000D56 000F1F 001143 00123F 001372 001422 0015C5 00188B 0019B9 001AA0 001C23 001D09 "
+            "001E4F 002170 00219B 0023AE 0024E8 002564 0026B9 14FEB5 180373 1866DA 18A99B 18DBF2 246E96 5CF9DD "
+            "74867A 782BCB 848F69 90B11C A41F72 B083FE B8AC6F BC305B C81F66 D067E5 D4AE52 D4BED9 E0DB55 F04DA2 "
+            "F48E38 F8B156 F8BC12 F8DB88",
+    "HP / Hewlett Packard": "000802 000883 000A57 000BCD 000D9D 000E7F 000F20 001083 00110A 001185 001279 001321 "
+                            "0014C2 001635 001708 0017A4 001871 0018FE 0019BB 001A4B 001B78 001CC4 001E0B 001F29 "
+                            "00215A 002264 00237D 002481 0025B3 002655 009C02 101F74 1458D0 18A905 1CC1DE 2C27D7 "
+                            "2C4138 2C44FD 308D99 30E171 3464A9 38EAA7 3C4A92 3CD92B 40B034 441EA1 5065F3 6C3BE5 "
+                            "70106F 784859 78E3B5 80C16E 843497 8CDCD4 9457A5 984BE1 98E7F4 A0481C A45D36 AC162D "
+                            "B499BA B4B52F C4346B C8CBB8 D07E28 D48564 D8D385 E4115B EC8EB5 F0921C FC15B4",
+    "Brother": "001BA9 008077 30055C 3C2AF4",
+    "Canon": "000085 00BBC1 2C9EFC",
+    "Epson": "000048 0026AB 64EB8C 9CAED3 A4EE57 B0E892",
+    "Lexmark": "002000",
+    "Kyocera": "0017C8",
+    "Xerox": "0000AA",
+    "Ricoh": "002673",
+    "Hikvision": "2857BE 4419B6 4CBD8F 54C415 8CE748 A41437 BCAD28 C056E3 C42F90 E0BAAD",
+    "Dahua": "14A78B 38AF29 3CEF8C 4C11BF 9002A9 A0BD1D BC325F E0508B",
+    "Reolink": "EC71DB",
+    "Philips Hue (Signify)": "001788 ECB5FA",
+    "Roku": "000D4B 8C4962 AC3A7A B0A737 CC6DA0 D83134 DC3A5E",
+    "Nintendo": "0009BF 001656 0017AB 001AE9 001BEA 001CBE 001DBC 001E35 001F32 0021BD 002247 0022AA 0022D7 "
+                "002331 0023CC 00241E 0024F3 0025A0 34AF2C 40D28A 58BDA3 7CBB8A 8CCDE8 98B6E9 9CE635 A45C27 "
+                "B8AE6E CC9E00 D86BF7 E00C7F E84ECE",
+    "ASUS": "000C6E 000EA6 00112F 0011D8 0013D4 0015F2 001731 0018F3 001A92 001BFC 001D60 001E8C 001FC6 002215 "
+            "002354 00248C 002618 049226 08606E 107B44 10BF48 14DAE9 1C872C 2C4D54 2C56DC 305A3A 382C4A 40167E "
+            "485B39 50465D 54A050 60A44C 7824AF 88D7F6 9C5C8E AC220B BCAEC5 BCEE7B C86000 D850E6 E03F49 F07959 "
+            "F46D04 F832E4",
+    "Lenovo": "28D244 507B9D 54E1AD 8C1645 98FA9B",
+    "Gigabyte": "001A4D 001D7D 001FD0 00241D 18C04D 1C1B0D 408D5C 50E549 74D435 94DE80 B42E99 E0D55E FCAA14",
+    "MSI (Micro-Star)": "00D861 309C23 448A5B 4CCC6A D8CB8A",
+    "ASRock": "7085C2 A8A159 BC5FF4 D05099",
+    "Realtek": "00E04C",
+    "Supermicro": "002590 003048 0CC47A 3CECEF AC1F6B",
+    "Western Digital": "0014EE 0090A9",
+    "Buffalo": "001601 0024A5 106F3F 4CE676 DCFB02",
+    "Belkin": "001150 001CDF 08863B 944452 B4750E EC1A59",
+    "Tenda": "C83A35",
+    "Aruba (HPE)": "000B86 001A1E 204C03 24DEC6 6CF37F 9C1C12 D8C7C8",
+    "Ruckus": "001F41",
+    "Fortinet": "000910 085B0E 906CAC",
+    "Arcadyan (z. B. Speedport)": "001A2A 7C4FB5 849CA6",
+    "Sagemcom": "0037B7 3C81D8 7C034C",
+    "Netatmo": "70EE50",
+    "eQ-3 (Homematic)": "001A22",
+    "Polycom": "0004F2 64167F",
+    "Yealink": "001565 249AD8 805EC0",
+    "snom": "000413",
+    "Grandstream": "000B82 C074AD",
+    "Panasonic": "0080F0",
+    "Denon/Marantz": "0005CD",
+    "Yamaha": "00A0DE AC44F2",
+    "OnePlus": "64A2F9 94652D C0EEFB",
+    "NVIDIA": "00044B",
+    "iRobot": "501479",
+    "Elgato": "3C6A9D",
+}
+
+BUILTIN = {}
+for _vendor, _prefixes in _BUILTIN.items():
+    for _p in _prefixes.split():
+        BUILTIN[_p] = _vendor
+
+SYSTEM_FILES = ["/usr/share/ieee-data/oui.txt", "/usr/share/hwdata/oui.txt", "/usr/share/misc/oui.txt",
+                "/usr/share/nmap/nmap-mac-prefixes", "/usr/share/wireshark/manuf"]
+_system = None
+_lock = threading.Lock()
+
+
+def normalize(mac):
+    """'aa:bb:cc:dd:ee:ff' / 'AA-BB-CC-...' -> 'AABBCC' (oder '' bei Unsinn)."""
+    h = re.sub(r"[^0-9A-Fa-f]", "", mac or "").upper()
+    return h[:6] if len(h) >= 6 else ""
+
+
+def is_random(mac):
+    """Lokal verwaltete (z. B. zufällige Smartphone-)MAC: Bit 2 im ersten Byte."""
+    p = normalize(mac)
+    return bool(p) and bool(int(p[:2], 16) & 0x02)
+
+
+def _load_system():
+    """Lädt eine vollständige OUI-Liste des Systems (falls vorhanden) – einmalig."""
+    global _system
+    with _lock:
+        if _system is not None:
+            return _system
+        data = {}
+        for path in SYSTEM_FILES:
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        m = re.match(r"^([0-9A-Fa-f]{2})[-:]?([0-9A-Fa-f]{2})[-:]?([0-9A-Fa-f]{2})(?:\s+\(hex\))?\s+(.+)$", line)
+                        if m and "/" not in line.split()[0]:
+                            key = (m.group(1) + m.group(2) + m.group(3)).upper()
+                            name = m.group(4).strip().split("\t")[-1].strip()
+                            data.setdefault(key, name)
+            except OSError:
+                continue
+            if data:
+                break
+        _system = data
+        return data
+
+
+def lookup(mac, use_system=True):
+    p = normalize(mac)
+    if not p:
+        return ""
+    if p in BUILTIN:
+        return BUILTIN[p]
+    if use_system:
+        v = _load_system().get(p)
+        if v:
+            return v
+    return ""

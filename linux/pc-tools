@@ -1,0 +1,8 @@
+#!/bin/sh
+# Starter für PC-Tools für Linux (startet "python3 -m pctools" aus diesem Ordner).
+DIR=$(dirname "$(readlink -f "$0")")
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "PC-Tools braucht Python 3.8 oder neuer (Paket python3)." >&2
+    exit 1
+fi
+PYTHONPATH="$DIR${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m pctools "$@"

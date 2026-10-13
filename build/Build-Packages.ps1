@@ -9,14 +9,16 @@ $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 $ver = (Select-String -Path PCPflege.ps1 -Pattern "^\`$AppVersion = '([^']+)'").Matches[0].Groups[1].Value
 if (-not $ver) { throw 'AppVersion in PCPflege.ps1 nicht gefunden.' }
-if (Test-Path $Out) { Remove-Item $Out -Recurse -Force }
-New-Item -ItemType Directory -Path $Out | Out-Null
+New-Item -ItemType Directory -Path $Out -Force | Out-Null
+Get-ChildItem $Out -Filter '*.zip' -ErrorAction SilentlyContinue | Remove-Item -Force
 $stage = Join-Path $Out 'stage'
 
 function New-Pkg([string]$Name, [bool]$Portable, [bool]$Lite) {
     $d = Join-Path $stage $Name; $pt = Join-Path $d 'PC-Tools'
     New-Item -ItemType Directory -Path (Join-Path $pt 'Zubehoer') -Force | Out-Null
     Copy-Item PCPflege.ps1, PCPflege.ico, Komplett-Reparatur.cmd -Destination $pt
+    if (Test-Path (Join-Path $Out 'PC-Tools.exe')) { Copy-Item (Join-Path $Out 'PC-Tools.exe') -Destination $pt }
+    if (Test-Path lang) { New-Item -ItemType Directory -Path (Join-Path $pt 'lang') -Force | Out-Null; Copy-Item lang/*.json -Destination (Join-Path $pt 'lang') }
     Copy-Item Zubehoer/* -Destination (Join-Path $pt 'Zubehoer') -Recurse
     Copy-Item SICHERHEIT.md -Destination (Join-Path $pt 'Zubehoer')
     if ($Portable) {

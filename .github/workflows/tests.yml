@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['PCPflege.ps1', 'lang/**', 'tests/**', 'launcher/**']
+    paths: ['PCPflege.ps1', 'lang/**', 'tests/**', 'launcher/**', 'linux/**', 'installer/**']
 jobs:
   windows:
     runs-on: windows-latest
@@ -12,3 +12,20 @@ jobs:
       - name: Übersetzungskern und Sprachdateien prüfen
         shell: powershell
         run: ./tests/i18n-test.ps1
+      - name: Starter PC-Tools.exe übersetzen
+        shell: powershell
+        run: ./launcher/Build-Launcher.ps1 -Version '0.0.1' -Out dist
+      - name: Installationsprogramm übersetzen
+        shell: pwsh
+        run: |
+          $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { choco install innosetup -y --no-progress | Out-Null; $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1 }
+          & $iscc "/DAppVersion=0.0.1" "/DSrcDir=$PWD" "/DOutDir=$PWD\dist" installer\PC-Tools.iss
+          if ($LASTEXITCODE -ne 0) { Write-Host '::error::Inno Setup fehlgeschlagen'; exit 1 }
+          Get-ChildItem dist | ForEach-Object { Write-Host ("::notice::{0} {1:N0} Bytes" -f $_.Name, $_.Length) }
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux-Tests
+        run: cd linux && PCTOOLS_TEST_ALLOW_ROOT=1 python3 -m unittest discover -s tests
