@@ -1685,7 +1685,7 @@ namespace PcTools {
     public static class I18n {
         public static string Lang = "de-DE";
         static Dictionary<string, string> exact = new Dictionary<string, string>(StringComparer.Ordinal);
-        class Pat { public Regex Rx; public string Repl; public string Anchor; public int[] Order; }
+        class Pat { public Regex Rx; public string Repl; public string Anchor; }
         static List<Pat> pats = new List<Pat>();
         static Dictionary<string, List<KeyValuePair<string, string>>> frag = new Dictionary<string, List<KeyValuePair<string, string>>>(StringComparer.Ordinal);
         static Dictionary<string, string> cache = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -1827,7 +1827,7 @@ namespace PcTools {
             var hi = fe as HeaderedItemsControl;
             if (hi != null && hi.Header is string && hi.HeaderTemplate == null && hi.HeaderTemplateSelector == null) hi.HeaderTemplate = tpl;
             var cc = fe as ContentControl;
-            if (cc != null && !(fe is Window) && !(fe is ToolTip && false)) DoContent(cc);
+            if (cc != null && !(fe is Window)) DoContent(cc);
             var dg = fe as DataGrid;
             if (dg != null) DoGrid(dg);
             var gv = fe as ListView;
