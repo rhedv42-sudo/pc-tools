@@ -13,7 +13,8 @@ Verbindungen ins Internet entstehen nur durch Funktionen, die der Benutzer start
 | Werkzeuge/Installationen auf Knopfdruck | Hersteller-Downloadseiten (z.B. Sysinternals, TeamViewer, AnyDesk, RustDesk, Ninite) | Download-Anfrage | nur auf Knopfdruck |
 | Speedtest, DNS-Vergleich | speed.cloudflare.com, öffentliche DNS-Server | Mess-Anfragen | nur auf Knopfdruck |
 | Netzwerk dokumentieren | api.ipify.org (öffentliche IP), optional internetdb.shodan.io (nur die eigene öffentliche IP) | eigene öffentliche IP-Adresse | Häkchen „Erreichbarkeit von außen prüfen“ |
-| KI-Assistent (optional) | api.anthropic.com | Frage und die dazu gewählten PC-Infos | nur mit eigenem API-Schlüssel und auf Knopfdruck |
+| KI-Assistent (optional) | der gewählte Anbieter: localhost:11434 (Ollama, bleibt auf dem PC), api.groq.com, openrouter.ai, api.mistral.ai, api.anthropic.com, api.openai.com, generativelanguage.googleapis.com oder eine selbst eingetragene Adresse | Frage und die dazu gewählten PC-Infos | nur auf Knopfdruck; bei Ollama verlässt nichts den PC |
+| KI-Assistent: Ollama einrichten (optional) | winget (Microsoft/GitHub), ollama.com | keine persönlichen Daten (Programm- und Modell-Download) | nur nach Bestätigung |
 | Benachrichtigungen (optional) | vom Benutzer eingetragene Ziele (ntfy, Home Assistant, Teams/Slack-Webhook) | Kurzmeldung zum PC-Zustand | Einstellungen > Benachrichtigungen |
 | Garantie-Abfrage, ISO-Download | Herstellerseiten, Microsoft, uupdump.net | Seriennummer/Modell bzw. Build | nur auf Knopfdruck |
 | Netzwerk-Prüfungen | nur Geräte im eigenen Netz bzw. der eigene Router | Verbindungsversuche | nur auf Knopfdruck / Zeitplan, den der Benutzer einschaltet |
@@ -22,4 +23,4 @@ Zugangsdaten (FRITZ!Box-Kennwort, Home-Assistant-Token, API-Schlüssel, GitHub-T
 außer an das jeweilige Ziel selbst, und – wenn überhaupt gespeichert – mit Windows-Verschlüsselung (DPAPI) auf
 diesem PC. WLAN-Kennwörter kommen nie in Berichte.
 
-Für Dienste Dritter gelten deren Datenschutzbestimmungen (z.B. GitHub, Microsoft, Cloudflare, Anthropic, Shodan).
+Für Dienste Dritter gelten deren Datenschutzbestimmungen (z.B. GitHub, Microsoft, Cloudflare, Shodan und der jeweils gewählte KI-Anbieter).

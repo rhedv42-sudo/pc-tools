@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Auto, [switch]$Run, [string]$Parts = '', [switch]$Analyze, [switch]$CheckOnly, [string]$RunId = '', [string]$AppsFile = '', [string]$WingetFile = '', [string]$DirectFile = '', [string]$Monitor = '', [switch]$DeskArrange, [string]$Topology = '', [int]$Delay = 0, [switch]$Silent, [switch]$Install, [string]$JobFile = '', [switch]$Backup, [switch]$FleetPoll, [string]$FirstLogon = '', [switch]$NetDiag, [switch]$TbSync, [switch]$WinRepair, [switch]$NetDeep, [string]$DeepOpts = '', [switch]$FullBackup, [switch]$FullRepair, [switch]$NetDoc, [switch]$Sign, [string]$SignOpts = '', [string]$ChocoFile = '')
 
-$AppVersion = '13.7.1'
+$AppVersion = '13.8'
 $DefaultUpdateSource = 'github:rhedv42-sudo/pc-tools@stable'
 # Portabel (USB-Stick): Datei portable.txt neben dem Skript -> Einstellungen/Protokolle im Ordner Daten auf dem Stick
 $Script:IsPortable = [bool]($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'portable.txt')))
@@ -1562,7 +1562,7 @@ function Get-DefaultConfig {
         Cleaner = [ordered]@{ InSchedule = $false; Items = ''; KeepCookies = '' }
         OneClick = [ordered]@{ Updates = $true; Drivers = $true; Programs = $true; Repair = $true; AutoRepair = $false }
         DriverSafety = [ordered]@{ Enabled = $true; Keep = 5 }
-        Assistant = [ordered]@{ Model = 'claude-haiku-4-5-20251001'; KeyScope = 'Nur mein Windows-Konto'; MonthlyLimit = 0; MaxTokens = 1024; CtxPage = $true; CtxSystem = $false; CtxHealth = $false; CtxLog = $false; CtxSelection = $true; ErrorButton = $true }
+        Assistant = [ordered]@{ Provider = ''; Model = ''; CustomUrl = ''; KeyScope = 'Nur mein Windows-Konto'; MonthlyLimit = 0; MaxTokens = 1024; CtxPage = $true; CtxSystem = $false; CtxHealth = $false; CtxLog = $false; CtxSelection = $true; ErrorButton = $true }
         Integrate = [ordered]@{ MqttEnabled = $false; MqttHost = ''; MqttPort = 1883; MqttUser = ''; MqttTopic = 'pcpflege'; HaEnabled = $false; HaUrl = ''; RmmEnabled = $false; RmmUrl = '' }
         Notify = [ordered]@{ Enabled = $false; Ntfy = ''; HaWebhook = ''; ChatWebhook = ''; OnRed = $true; OnWarn = $true; OnBackup = $true; OnBluescreen = $true; OnRecover = $true }
         Schedule = [ordered]@{
@@ -19093,6 +19093,104 @@ $AiApiUrl = 'https://api.anthropic.com/v1/messages'
 $AiApiVersion = '2023-06-01'
 $AiMaxHistoryChars = 48000      # Verlauf wird vorne gekürzt, wenn er größer wird (ca. 12.000 Token)
 $AiMaxToolRounds = 6            # höchstens so viele automatische Werkzeug-Runden je Frage
+# KI-Anbieter (Version 13.8): Auswahl per Dropdown. Kind 'anthropic' = Messages-API, 'openai' = OpenAI-kompatibles chat/completions.
+# Der Gesprächsverlauf bleibt intern im Anthropic-Format und wird für OpenAI-kompatible Anbieter beim Senden übersetzt.
+$AiProviders = @(
+    [ordered]@{ Id = 'ollama'; Label = 'Kostenlos: Ollama - lokal auf diesem PC (ohne Konto)'; Kind = 'openai'; Url = 'http://localhost:11434/v1/chat/completions'; Models = @('qwen3:4b', 'qwen3:8b', 'gpt-oss:20b', 'llama3.1:8b'); NeedKey = $false; Free = $true; Local = $true; Name = 'Ollama'; Where = 'nirgendwohin - die KI läuft auf diesem PC'; KeyUrl = 'https://ollama.com/download'; KeyHint = 'Kein Schlüssel nötig. Ollama einmal installieren und ein Modell laden (Knöpfe unten).' }
+    [ordered]@{ Id = 'groq'; Label = 'Kostenlos: Groq (Gratis-Konto, sehr schnell)'; Kind = 'openai'; Url = 'https://api.groq.com/openai/v1/chat/completions'; Models = @('openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'llama-3.3-70b-versatile'); NeedKey = $true; Free = $true; Name = 'Groq'; Where = 'Groq (USA)'; KeyUrl = 'https://console.groq.com/keys'; KeyPrefix = 'gsk_'; KeyHint = 'Kostenloses Konto bei Groq anlegen, unter API Keys einen Schlüssel erzeugen (beginnt mit gsk_). Gratis mit Tageslimit.' }
+    [ordered]@{ Id = 'openrouter'; Label = 'Kostenlos: OpenRouter (Gratis-Modelle, ca. 50 Fragen/Tag)'; Kind = 'openai'; Url = 'https://openrouter.ai/api/v1/chat/completions'; Models = @('openrouter/free', 'openai/gpt-oss-120b:free', 'meta-llama/llama-3.3-70b-instruct:free'); NeedKey = $true; Free = $true; Name = 'OpenRouter'; Where = 'OpenRouter (USA) und den jeweiligen Modellanbieter'; KeyUrl = 'https://openrouter.ai/keys'; KeyPrefix = 'sk-or-'; KeyHint = 'Kostenloses Konto bei OpenRouter, Schlüssel unter Keys erzeugen (beginnt mit sk-or-). Modelle mit ":free" kosten nichts; mit Guthaben gehen dort auch alle bezahlten Modelle.' }
+    [ordered]@{ Id = 'mistral'; Label = 'Mistral (Server in der EU, Gratis-Testtarif oder bezahlt)'; Kind = 'openai'; Url = 'https://api.mistral.ai/v1/chat/completions'; Models = @('mistral-small-latest', 'mistral-medium-latest', 'mistral-large-latest'); NeedKey = $true; Free = $true; Name = 'Mistral'; Where = 'Mistral AI (Frankreich, EU)'; KeyUrl = 'https://console.mistral.ai/api-keys'; KeyHint = 'Konto bei Mistral anlegen, Tarif "Experiment" (gratis) oder bezahlt wählen und unter API Keys einen Schlüssel erzeugen.' }
+    [ordered]@{ Id = 'anthropic'; Label = 'Bezahlt: Claude (Anthropic)'; Kind = 'anthropic'; Url = $AiApiUrl; Models = $AiModels; NeedKey = $true; Free = $false; Name = 'Anthropic'; Where = 'Anthropic (USA)'; KeyUrl = 'https://console.anthropic.com/settings/keys'; KeyPrefix = 'sk-ant-'; KeyHint = 'Schlüssel aus console.anthropic.com (Konto mit Guthaben, beginnt mit sk-ant-).' }
+    [ordered]@{ Id = 'openai'; Label = 'Bezahlt: ChatGPT (OpenAI)'; Kind = 'openai'; Url = 'https://api.openai.com/v1/chat/completions'; Models = @('gpt-5.4-mini', 'gpt-5.4'); NeedKey = $true; Free = $false; Name = 'OpenAI'; Where = 'OpenAI (USA)'; KeyUrl = 'https://platform.openai.com/api-keys'; KeyPrefix = 'sk-'; TokField = 'max_completion_tokens'; KeyHint = 'Schlüssel aus platform.openai.com (Konto mit Guthaben, beginnt mit sk-). Das ChatGPT-Abo gilt dafür nicht.' }
+    [ordered]@{ Id = 'gemini'; Label = 'Bezahlt: Gemini (Google)'; Kind = 'openai'; Url = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'; Models = @('gemini-2.5-flash', 'gemini-2.5-pro'); NeedKey = $true; Free = $false; Name = 'Google'; Where = 'Google (USA)'; KeyUrl = 'https://aistudio.google.com/apikey'; KeyHint = 'Schlüssel aus Google AI Studio. In der EU nur mit Abrechnung (der Gratis-Tarif gilt hier nicht).' }
+    [ordered]@{ Id = 'custom'; Label = 'Andere KI / eigener Server (OpenAI-kompatibel)'; Kind = 'openai'; Url = ''; Models = @(); NeedKey = $false; Free = $false; Name = 'eigener Server'; Where = 'den eingetragenen Server'; KeyUrl = ''; KeyHint = 'Für jede KI mit OpenAI-kompatibler Schnittstelle (z.B. LM Studio, vLLM, Azure, DeepSeek, xAI): Adresse bis /chat/completions eintragen, Modellname eingeben, Schlüssel nur falls nötig.' }
+)
+function Get-AiProvider([string]$Id) { foreach ($p in $AiProviders) { if ($p.Id -eq $Id) { return $p } }; return $AiProviders[0] }
+# "anthropic=claude-...;ollama=qwen3:4b" <-> Hashtable. Ein alter Einzelwert gehört zu Claude.
+function ConvertFrom-AiModelMap([string]$Text) {
+    $h = @{}
+    foreach ($part in ([string]$Text -split ';')) {
+        $t = $part.Trim(); if (-not $t) { continue }
+        $i = $t.IndexOf('=')
+        if ($i -gt 0) { $h[$t.Substring(0, $i).Trim()] = $t.Substring($i + 1).Trim() } else { $h['anthropic'] = $t }
+    }
+    return $h
+}
+function ConvertTo-AiModelMap([hashtable]$Map) { (@($Map.Keys | Sort-Object | Where-Object { $Map[$_] } | ForEach-Object { '{0}={1}' -f $_, $Map[$_] })) -join ';' }
+function Get-AiBaseUrl([string]$ChatUrl) { return ([string]$ChatUrl -replace '/chat/completions/?$', '' -replace '/messages/?$', '').TrimEnd('/') }
+
+# ---------------------------------------------------------------- OpenAI-kompatibel: Anfrage aus dem internen (Anthropic-)Verlauf bauen
+function ConvertTo-AiOpenAiMessages([string]$System, [object[]]$Messages) {
+    $out = [System.Collections.Generic.List[object]]::new()
+    if ($System) { $out.Add([ordered]@{ role = 'system'; content = $System }) }
+    foreach ($m in @($Messages)) {
+        if (-not $m) { continue }
+        $role = [string]$m.role
+        if ($m.content -is [string]) { $out.Add([ordered]@{ role = $role; content = [string]$m.content }); continue }
+        $texts = [System.Collections.Generic.List[string]]::new()
+        $calls = [System.Collections.Generic.List[object]]::new()
+        $results = [System.Collections.Generic.List[object]]::new()
+        foreach ($b in @($m.content)) {
+            if (-not $b) { continue }
+            switch ([string]$b.type) {
+                'text' { if ([string]$b.text) { $texts.Add([string]$b.text) } }
+                'tool_use' {
+                    $inp = $b.input; if ($null -eq $inp) { $inp = [ordered]@{} }
+                    $calls.Add([ordered]@{ id = [string]$b.id; type = 'function'; function = [ordered]@{ name = [string]$b.name; arguments = (ConvertTo-AiJson $inp) } })
+                }
+                'tool_result' {
+                    $c = $b.content
+                    if (-not ($c -is [string])) { $c = ((@($c) | ForEach-Object { if ($_ -and $_.text) { [string]$_.text } else { [string]$_ } }) -join "`n") }
+                    if ($b.is_error) { $c = 'FEHLER: ' + $c }
+                    $results.Add([ordered]@{ role = 'tool'; tool_call_id = [string]$b.tool_use_id; content = [string]$c })
+                }
+            }
+        }
+        if ($role -eq 'assistant') {
+            $a = [ordered]@{ role = 'assistant'; content = ($texts -join "`n`n") }
+            if ($calls.Count) { $a.tool_calls = $calls.ToArray() }
+            $out.Add($a)
+        } else {
+            foreach ($r in $results) { $out.Add($r) }
+            if ($texts.Count) { $out.Add([ordered]@{ role = 'user'; content = ($texts -join "`n`n") }) }
+        }
+    }
+    return $out.ToArray()
+}
+function New-AiOpenAiBody([string]$Model, [string]$System, [object[]]$Messages, [object[]]$Tools = @(), [int]$MaxTokens = 1024, [string]$TokField = 'max_tokens') {
+    if ($MaxTokens -lt 64) { $MaxTokens = 64 }
+    if (-not $TokField) { $TokField = 'max_tokens' }
+    $req = [ordered]@{ model = $Model; messages = @(ConvertTo-AiOpenAiMessages $System $Messages) }
+    $req[$TokField] = $MaxTokens
+    if (@($Tools).Count) {
+        $req.tools = @(@($Tools) | ForEach-Object { [ordered]@{ type = 'function'; function = [ordered]@{ name = [string]$_.name; description = [string]$_.description; parameters = $_.input_schema } } })
+    }
+    return (ConvertTo-AiJson $req)
+}
+# OpenAI-Antwort -> Anthropic-Form (content/stop_reason/usage), damit der Rest unverändert bleibt
+function ConvertFrom-AiOpenAiResponse($O) {
+    $ch = @($O.choices)[0]; $msg = $null; if ($ch) { $msg = $ch.message }
+    $content = [System.Collections.Generic.List[object]]::new()
+    $txt = ''; if ($msg -and $msg.content) { $txt = [string]$msg.content }
+    $txt = ([regex]::Replace($txt, '(?s)<think>.*?</think>', '')).Trim()
+    if ($txt) { $content.Add([pscustomobject]@{ type = 'text'; text = $txt }) }
+    $n = 0
+    foreach ($tc in @($msg.tool_calls)) {
+        if (-not $tc -or -not $tc.function) { continue }
+        $n++
+        $aiArgs = $null; $raw = $tc.function.arguments
+        if ($raw -is [string]) { if ($raw.Trim()) { try { $aiArgs = $raw | ConvertFrom-Json } catch { $aiArgs = $null } } } else { $aiArgs = $raw }
+        if ($null -eq $aiArgs) { $aiArgs = [pscustomobject]@{} }
+        $id = [string]$tc.id; if (-not $id) { $id = 'call_{0}_{1}' -f $n, ([guid]::NewGuid().ToString('N').Substring(0, 8)) }
+        $content.Add([pscustomobject]@{ type = 'tool_use'; id = $id; name = [string]$tc.function.name; input = $aiArgs })
+    }
+    $fr = [string]$ch.finish_reason
+    $stop = switch ($fr) { 'length' { 'max_tokens' } 'tool_calls' { 'tool_use' } default { 'end_turn' } }
+    if ($n -and $stop -eq 'end_turn') { $stop = 'tool_use' }
+    $in = 0; $out = 0
+    if ($O.usage) { try { $in = [long]$O.usage.prompt_tokens } catch { }; try { $out = [long]$O.usage.completion_tokens } catch { } }
+    [pscustomobject]@{ content = $content.ToArray(); stop_reason = $stop; model = [string]$O.model; usage = [pscustomobject]@{ input_tokens = $in; output_tokens = $out } }
+}
 
 # Whitelist: NUR diese Aktionen kann Claude vorschlagen. Jede wird vor der Ausführung vom Nutzer bestätigt.
 # Kind: Open = Seite öffnen, Run = Aufgabe starten, Read = Daten an Claude geben (nur nach Bestätigung)
@@ -19206,6 +19304,7 @@ function Get-AiRequestBytes([string]$Json) { return , ([Text.Encoding]::UTF8.Get
 # ---------------------------------------------------------------- Antwort auswerten
 function ConvertFrom-AiResponse([string]$Json) {
     $o = $Json | ConvertFrom-Json
+    if ($o.PSObject.Properties['choices']) { $o = ConvertFrom-AiOpenAiResponse $o }
     $texts = [System.Collections.Generic.List[string]]::new()
     $tools = [System.Collections.Generic.List[object]]::new()
     $hist = [System.Collections.Generic.List[object]]::new()
@@ -19245,37 +19344,37 @@ function New-AiToolResult([string]$Id, [string]$Text, [bool]$IsError = $false) {
 }
 
 # ---------------------------------------------------------------- Verständliche Fehlermeldungen
-function Get-AiErrorText([int]$Status, [string]$Body, [string]$Message) {
+function Get-AiErrorText([int]$Status, [string]$Body, [string]$Message, [string]$Name = 'Anthropic') {
     $apiMsg = ''; $apiType = ''
     if ($Body) { try { $e = $Body | ConvertFrom-Json; $apiMsg = [string]$e.error.message; $apiType = [string]$e.error.type } catch { } }
-    $det = $(if ($apiMsg) { ' (Anthropic: ' + $apiMsg + ')' } else { '' })
+    $det = $(if ($apiMsg) { ' (' + $Name + ': ' + $apiMsg + ')' } else { '' })
     switch ($Status) {
         0 {
             $m = [string]$Message
             if ($m -match '(?i)407|proxy') { return 'Der Proxy-Server lässt die Verbindung nicht zu (Proxy-Anmeldung nötig?). Bitte die Proxy-Einstellungen von Windows prüfen oder die Netzwerk-Diagnose starten. Details: ' + $m }
-            if ($m -match '(?i)NameResolution|resolve|auflös|Remotename|No such host|nicht bekannt') { return 'Keine Verbindung: Der Name api.anthropic.com lässt sich nicht auflösen. Ist der PC mit dem Internet verbunden? Tipp: Netzwerk-Diagnose starten. Details: ' + $m }
-            if ($m -match '(?i)Timeout|Zeitlimit|timed out|überschritten') { return 'Zeitüberschreitung: Anthropic hat nicht rechtzeitig geantwortet. Bitte gleich noch einmal versuchen oder ein schnelleres Modell wählen.' }
+            if ($m -match '(?i)NameResolution|resolve|auflös|Remotename|No such host|nicht bekannt') { return 'Keine Verbindung: Der Name des KI-Servers lässt sich nicht auflösen. Ist der PC mit dem Internet verbunden? Tipp: Netzwerk-Diagnose starten. Details: ' + $m }
+            if ($m -match '(?i)Timeout|Zeitlimit|timed out|überschritten') { return 'Zeitüberschreitung: ' + $Name + ' hat nicht rechtzeitig geantwortet. Bitte gleich noch einmal versuchen oder ein schnelleres Modell wählen.' }
             if ($m -match '(?i)SSL|TLS|Vertrauensstellung|trust|certificate|Zertifikat') { return 'Die sichere Verbindung (TLS) wurde abgelehnt - oft durch eine Firewall oder einen Virenschutz mit HTTPS-Prüfung. Details: ' + $m }
-            return 'Keine Verbindung zu Anthropic: ' + $m + ' - Internet, Firewall oder Proxy prüfen (Netzwerk-Diagnose hilft).'
+            return 'Keine Verbindung zu ' + $Name + ': ' + $m + ' - Internet, Firewall oder Proxy prüfen (Netzwerk-Diagnose hilft).'
         }
         400 {
-            if ($apiMsg -match '(?i)credit|balance|billing|guthaben') { return 'Das Guthaben des Anthropic-Kontos ist aufgebraucht. Bitte unter console.anthropic.com > Billing aufladen.' + $det }
+            if ($apiMsg -match '(?i)credit|balance|billing|guthaben') { return 'Das Guthaben beim KI-Anbieter (' + $Name + ') ist aufgebraucht. Bitte dort aufladen - oder oben einen kostenlosen Anbieter wählen.' + $det }
             return 'Die Anfrage wurde abgelehnt (ungültig).' + $det + ' Tipp: "Neues Gespräch" starten.'
         }
-        401 { return 'Der API-Schlüssel ist ungültig oder wurde widerrufen. Bitte in console.anthropic.com einen neuen Schlüssel erzeugen und hier unter "API-Schlüssel" einfügen.' }
+        401 { return 'Der API-Schlüssel ist ungültig oder wurde widerrufen. Bitte beim Anbieter einen neuen Schlüssel erzeugen und hier unter "API-Schlüssel" einfügen.' }
         403 { return 'Der API-Schlüssel hat keine Berechtigung für diese Anfrage (z.B. Modell nicht freigeschaltet oder Organisation gesperrt).' + $det }
         404 { return 'Das gewählte Modell ist nicht verfügbar. Bitte rechts unter "Modell" ein anderes wählen.' + $det }
         413 { return 'Die Anfrage ist zu groß. Bitte weniger Kontext mitsenden oder ein neues Gespräch beginnen.' }
         429 {
-            if ($apiMsg -match '(?i)credit|balance|billing|spend|limit.*month|monthly') { return 'Das Ausgabenlimit des Anthropic-Kontos ist erreicht.' + $det }
-            return 'Zu viele Anfragen in kurzer Zeit (Rate-Limit von Anthropic). Bitte eine Minute warten und dann erneut fragen.'
+            if ($apiMsg -match '(?i)credit|balance|billing|spend|limit.*month|monthly') { return 'Das Ausgaben- bzw. Gratis-Limit bei ' + $Name + ' ist erreicht - später erneut versuchen oder oben einen anderen Anbieter wählen.' + $det }
+            return 'Zu viele Anfragen in kurzer Zeit (Rate-Limit von ' + $Name + '). Bitte eine Minute warten und dann erneut fragen.'
         }
-        500 { return 'Fehler bei Anthropic (500). Bitte später noch einmal versuchen.' }
-        502 { return 'Anthropic ist gerade nicht erreichbar (502). Bitte später noch einmal versuchen.' }
-        503 { return 'Anthropic ist gerade nicht erreichbar (503). Bitte später noch einmal versuchen.' }
+        500 { return 'Fehler bei ' + $Name + ' (500). Bitte später noch einmal versuchen.' }
+        502 { return '' + $Name + ' ist gerade nicht erreichbar (502). Bitte später noch einmal versuchen.' }
+        503 { return '' + $Name + ' ist gerade nicht erreichbar (503). Bitte später noch einmal versuchen.' }
         529 { return 'Claude ist gerade überlastet (529). Bitte in ein paar Minuten noch einmal fragen - oder vorübergehend ein anderes Modell wählen.' }
     }
-    return ('Unerwartete Antwort von Anthropic (HTTP {0}).{1}' -f $Status, $det)
+    return ('Unerwartete Antwort von {2} (HTTP {0}).{1}' -f $Status, $det, $Name)
 }
 
 # ---------------------------------------------------------------- HTTP (läuft in Invoke-Bg; UTF-8-Bytes, TLS 1.2, Windows-Proxy)
@@ -19318,15 +19417,72 @@ function Invoke-AiHttp([string]$Method, [string]$Url, [hashtable]$Headers, [byte
     [pscustomobject]@{ Status = $status; Body = $text; Error = $errMsg }
 }
 # Eine Messages-Anfrage mit einer Wiederholung bei Überlastung (läuft im Hintergrund)
-function Invoke-AiMessages([string]$Key, [byte[]]$Body, [string]$Url, [string]$Version) {
-    $h = @{ 'x-api-key' = $Key; 'anthropic-version' = $Version; 'content-type' = 'application/json' }
+function Invoke-AiMessages([string]$Key, [byte[]]$Body, [string]$Url, [string]$Version, [string]$Kind = 'anthropic', [int]$TimeoutSec = 150) {
+    $local = ([string]$Url -match '^https?://(localhost|127\.0\.0\.1|\[::1\])(:|/)')
+    if ($Kind -eq 'anthropic') { $h = @{ 'x-api-key' = $Key; 'anthropic-version' = $Version; 'content-type' = 'application/json' } }
+    else {
+        $h = @{ 'content-type' = 'application/json'; 'X-Title' = 'PC-Tools'; 'HTTP-Referer' = 'https://github.com/rhedv42-sudo/pc-tools' }
+        if ($Key) { $h['Authorization'] = 'Bearer ' + $Key }
+    }
     $res = $null
     for ($try = 1; $try -le 2; $try++) {
-        $res = Invoke-AiHttp 'POST' $Url $h $Body 150
+        $res = Invoke-AiHttp 'POST' $Url $h $Body $TimeoutSec -NoProxy:$local
         if ($res.Status -in 500, 502, 503, 529 -and $try -lt 2) { Start-Sleep -Seconds 4; continue }
         break
     }
     return $res
+}
+
+# ---------------------------------------------------------------- Ollama (kostenlose lokale KI) - alles im Hintergrund
+function Get-OllamaExe {
+    foreach ($c in @((Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'), (Join-Path $env:ProgramFiles 'Ollama\ollama.exe'))) { if ($c -and (Test-Path -LiteralPath $c)) { return $c } }
+    try { $g = Get-Command ollama.exe -ErrorAction Stop; return $g.Source } catch { }
+    return ''
+}
+function Get-OllamaState([string]$BaseUrl = 'http://localhost:11434') {
+    $o = [pscustomobject]@{ Installed = [bool](Get-OllamaExe); Running = $false; Models = @(); Version = '' }
+    $r = Invoke-AiHttp 'GET' ($BaseUrl.TrimEnd('/') + '/api/tags') @{} $null 4 -NoProxy
+    if ([int]$r.Status -eq 200) {
+        $o.Running = $true; $o.Installed = $true
+        try { $o.Models = @(($r.Body | ConvertFrom-Json).models | ForEach-Object { [string]$_.name }) } catch { }
+    }
+    return $o
+}
+function Start-OllamaServer {
+    $st = Get-OllamaState
+    if ($st.Running) { return $true }
+    $exe = Get-OllamaExe; if (-not $exe) { return $false }
+    $app = Join-Path (Split-Path -Parent $exe) 'ollama app.exe'
+    try { if (Test-Path -LiteralPath $app) { Start-Process -FilePath $app -WindowStyle Hidden } else { Start-Process -FilePath $exe -ArgumentList 'serve' -WindowStyle Hidden } } catch { return $false }
+    for ($i = 0; $i -lt 20; $i++) { Start-Sleep -Milliseconds 750; if ((Get-OllamaState).Running) { return $true } }
+    return $false
+}
+# Installiert Ollama (winget, still) falls nötig, startet es und lädt das Modell. Gibt Textzeilen zurück.
+function Install-OllamaModel([string]$Model, [switch]$InstallApp) {
+    $log = [System.Collections.Generic.List[string]]::new()
+    if (-not (Get-OllamaExe) -and $InstallApp) {
+        $wg = ''; try { $wg = (Get-Command winget.exe -ErrorAction Stop).Source } catch { }
+        if (-not $wg) { $log.Add('winget fehlt - bitte Ollama von https://ollama.com/download installieren.'); return $log.ToArray() }
+        $log.Add('Installiere Ollama (winget, ca. 1 GB) ...')
+        $r = Invoke-NdCmd $wg 'install -e --id Ollama.Ollama --silent --accept-package-agreements --accept-source-agreements --disable-interactivity' 900
+        if (-not (Get-OllamaExe)) { $log.Add('Installation nicht abgeschlossen: ' + ([string]$r).Trim()); return $log.ToArray() }
+        $log.Add('Ollama installiert.')
+    }
+    if (-not (Start-OllamaServer)) { $log.Add('Ollama läuft nicht und ließ sich nicht starten. Bitte Ollama einmal über das Startmenü öffnen.'); return $log.ToArray() }
+    if ($Model) {
+        if (@((Get-OllamaState).Models) -contains $Model -or @((Get-OllamaState).Models) -contains ($Model + ':latest')) { $log.Add(('Modell {0} ist bereits geladen.' -f $Model)); return $log.ToArray() }
+        $log.Add(('Lade Modell {0} herunter (einige GB, kann je nach Leitung 5-30 Minuten dauern) ...' -f $Model))
+        $body = [Text.Encoding]::UTF8.GetBytes((ConvertTo-AiJson ([ordered]@{ model = $Model; stream = $false })))
+        $r = Invoke-AiHttp 'POST' 'http://localhost:11434/api/pull' @{ 'content-type' = 'application/json' } $body 7200 -NoProxy
+        if ([int]$r.Status -eq 200) { $log.Add(('OK: Modell {0} ist bereit.' -f $Model)) } else { $log.Add(('Laden fehlgeschlagen (HTTP {0}): {1} {2}' -f $r.Status, $r.Body, $r.Error)) }
+    }
+    return $log.ToArray()
+}
+# Modellvorschlag nach Arbeitsspeicher
+function Get-OllamaSuggestedModel {
+    $gb = 8; try { $gb = [math]::Round((Get-CimInstance Win32_ComputerSystem -OperationTimeoutSec 3 -ErrorAction Stop).TotalPhysicalMemory / 1GB) } catch { }
+    if ($gb -ge 24) { return 'qwen3:8b' }
+    return 'qwen3:4b'
 }
 
 # ---------------------------------------------------------------- Verlauf kürzen (Werkzeug-Paare bleiben gültig)
@@ -19391,19 +19547,20 @@ function Test-AiLimitReached($Usage, [long]$Limit) {
 }
 
 # ---------------------------------------------------------------- API-Schlüssel (DPAPI, je PC eigene Datei - auch portabel auf dem Stick)
-function Get-AiKeyFile([string]$Dir) {
+function Get-AiKeyFile([string]$Dir, [string]$Provider = 'anthropic') {
     $pc = $env:COMPUTERNAME; if (-not $pc) { $pc = [Environment]::MachineName }
-    Join-Path (Join-Path $Dir 'Assistant') ('claude-{0}.key' -f ($pc -replace '[^\w\-]', '_'))
+    $pre = $(if (-not $Provider -or $Provider -eq 'anthropic') { 'claude' } else { $Provider -replace '[^\w\-]', '_' })
+    Join-Path (Join-Path $Dir 'Assistant') ('{0}-{1}.key' -f $pre, ($pc -replace '[^\w\-]', '_'))
 }
-function Save-AiKey([string]$Key, [string]$Dir, [string]$Scope = 'CurrentUser') {
+function Save-AiKey([string]$Key, [string]$Dir, [string]$Scope = 'CurrentUser', [string]$Provider = 'anthropic') {
     $k = ([string]$Key).Trim().Trim('"', "'").Trim()
     if (-not $k) { throw 'Kein Schlüssel eingegeben.' }
-    if ($k -match '\s') { throw 'Der Schlüssel enthält Leerzeichen - bitte nur den Schlüssel selbst einfügen (beginnt meist mit sk-ant-).' }
+    if ($k -match '\s') { throw 'Der Schlüssel enthält Leerzeichen - bitte nur den Schlüssel selbst einfügen (ohne Leerzeichen).' }
     Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
     $sc = $(if ($Scope -eq 'LocalMachine') { [Security.Cryptography.DataProtectionScope]::LocalMachine } else { [Security.Cryptography.DataProtectionScope]::CurrentUser })
     $entropy = [Text.Encoding]::UTF8.GetBytes('PC-Tools|KI-Assistent')
     $blob = [Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes($k), $entropy, $sc)
-    $f = Get-AiKeyFile $Dir
+    $f = Get-AiKeyFile $Dir $Provider
     New-Item (Split-Path -Parent $f) -ItemType Directory -Force | Out-Null
     $hdr = [byte[]]@($(if ($Scope -eq 'LocalMachine') { 2 } else { 1 }))
     [IO.File]::WriteAllBytes($f, [byte[]]($hdr + $blob))
@@ -19411,8 +19568,8 @@ function Save-AiKey([string]$Key, [string]$Dir, [string]$Scope = 'CurrentUser') 
     if ($Scope -eq 'LocalMachine' -and (Get-Command Test-IsAdmin -ErrorAction SilentlyContinue) -and (Test-IsAdmin)) { try { $null = & icacls.exe $f /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' 2>&1 } catch { } }
     return $f
 }
-function Get-AiKey([string]$Dir) {
-    $f = Get-AiKeyFile $Dir
+function Get-AiKey([string]$Dir, [string]$Provider = 'anthropic') {
+    $f = Get-AiKeyFile $Dir $Provider
     if (-not (Test-Path -LiteralPath $f)) { return $null }
     try {
         Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
@@ -19424,14 +19581,14 @@ function Get-AiKey([string]$Dir) {
         return [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect($blob, $entropy, $sc))
     } catch { return $null }
 }
-function Get-AiKeyState([string]$Dir) {
-    $f = Get-AiKeyFile $Dir
+function Get-AiKeyState([string]$Dir, [string]$Provider = 'anthropic') {
+    $f = Get-AiKeyFile $Dir $Provider
     if (-not (Test-Path -LiteralPath $f)) { return [pscustomobject]@{ Present = $false; Readable = $false; Scope = ''; Date = $null } }
     $sc = ''; try { $b = [IO.File]::ReadAllBytes($f); $sc = $(if ($b[0] -eq 2) { 'LocalMachine' } else { 'CurrentUser' }) } catch { }
-    [pscustomobject]@{ Present = $true; Readable = [bool](Get-AiKey $Dir); Scope = $sc; Date = (Get-Item -LiteralPath $f).LastWriteTime }
+    [pscustomobject]@{ Present = $true; Readable = [bool](Get-AiKey $Dir $Provider); Scope = $sc; Date = (Get-Item -LiteralPath $f).LastWriteTime }
 }
-function Remove-AiKey([string]$Dir) {
-    $f = Get-AiKeyFile $Dir
+function Remove-AiKey([string]$Dir, [string]$Provider = 'anthropic') {
+    $f = Get-AiKeyFile $Dir $Provider
     if (Test-Path -LiteralPath $f) {
         # vor dem Löschen überschreiben
         try { $len = (Get-Item -LiteralPath $f).Length; [IO.File]::WriteAllBytes($f, (New-Object byte[] $len)) } catch { }
@@ -21011,6 +21168,7 @@ $pageSecurity = New-Page 'Sicherheit' 'Alle Schutzfunktionen dieses PCs auf eine
 
 # ---------------------------------------------------------------- Handbuch (wird mit jeder Version gepflegt)
 $ManualNews = @(
+    'Version 13.8: Der KI-Assistent hat jetzt eine Anbieter-Auswahl (Dropdown): komplett kostenlos und ohne Konto mit Ollama (KI läuft lokal auf dem PC, "Ollama einrichten" installiert alles mit einem Klick), kostenlos mit Gratis-Konto über Groq, OpenRouter oder Mistral (EU), bezahlt mit Claude, ChatGPT oder Gemini - oder jede andere OpenAI-kompatible KI. Schlüssel und Modell je Anbieter getrennt. "Nicht genutzte Programme" lässt sich jetzt ab 5 Tagen einstellen. Dazu Stabilität: Dienste-Aktionen, Netzlaufwerke, Update-Prüfung und Statusmeldungen können PC-Tools nicht mehr endlos blockieren.',
     'Version 13.7.1: PC-Tools ist jetzt Open Source (Apache 2.0) - https://github.com/rhedv42-sudo/pc-tools. Updates kommen ab jetzt aus dem öffentlichen Repository (Zweig stable, Downloads unter Releases), ein GitHub-Token ist nicht mehr nötig. Bestehende Installationen werden automatisch umgestellt.',
     'Version 13.7: Neu "Nicht genutzte Programme" (Übersicht und PC-Reiniger > Programme): findet Programme, die seit 90 Tagen bis 2 Jahren nicht gestartet wurden (Windows-Spuren Prefetch, BAM und UserAssist), schützt Laufzeiten, Treiber, Sicherheits-, Sicherungs-, VPN-, Fernwartungs-, Office- und Druckerprogramme und entfernt die angehakten nach EINER Bestätigung still nacheinander - mit Wiederherstellungspunkt, Resten (Ordner in den Papierkorb, Registry mit Sicherung) und verwaisten Verknüpfungen. Ninite Pro ist nicht mehr Teil des Downloads - wer eine Lizenz hat, kopiert NinitePro.exe nach C:\ProgramData\PCPflege (Anleitung: Ninite-Pro-einbinden.txt).',
     'Version 13.6: Netzwerk dokumentieren erkennt jetzt die gesamte Netzwerk-Infrastruktur - Router (auch weitere Router und Doppel-NAT), Firewalls (Sophos, Fortinet, pfSense/OPNsense, Securepoint, Zyxel, LANCOM ...), Switches, Access Points (UniFi, Omada, Aruba, LANCOM, MikroTik, FRITZ!Repeater, Mesh ...) und WLAN-Controller. Quellen: Hersteller, Weboberfläche, UPnP, SNMP (Modell, Firmware, Standort, Kontakt, Laufzeit), Verwaltungsports und die WLAN-Sender, die zur Geräte-MAC passen. Neues Berichtskapitel "Netzwerk-Infrastruktur" mit WLAN-Abdeckung je Access Point und dem Weg ins Internet; neue Befunde: SNMP mit Standard-Community, weiterer Router, Doppel-NAT.',
@@ -21091,7 +21249,7 @@ $ManualChapters = @(
        Items = @('Fragen|Unten ins Feld tippen und Enter drücken (Umschalt+Enter = neue Zeile). Die Vorschläge im leeren Chat ("Warum ist mein PC langsam?", "Erkläre das letzte Protokoll", "Ist mein PC sicher?" ...) senden sofort. Antworten sind formatiert: fett, Listen, Befehle als Codeblock mit Knopf "Kopieren". Jede Antwort lässt sich kopieren, das ganze Gespräch über "Exportieren" als Textdatei speichern; "Neues Gespräch" beginnt von vorn.', 'Von jeder Seite|Der Knopf "Assistent" unten in der Statusleiste oder Strg+Umschalt+A öffnet den Assistenten mit der gerade offenen Seite als Kontext - Claude weiß dann, worum es geht, und kennt den Handbuch-Text dieser Seite.', 'Protokoll und Fehler erklären|Auf der Seite Protokoll erklärt "Protokoll erklären (KI)" den markierten Ausschnitt (sonst die letzten Zeilen) - auch per Rechtsklick > "Mit KI-Assistent erklären". Fehlerfenster von PC-Tools haben den Knopf "Assistent fragen". Beides hängt den Text nur an - gesendet wird erst mit "Senden".', 'Aktionen nur mit deinem Ja|Claude kann nur Aktionen aus einer festen Liste vorschlagen: Seite öffnen, Aufräumen (analysieren/starten), Optimieren, Updates suchen/installieren, Netzwerk-Diagnose, Sicherheit prüfen, Zustand neu berechnen, Selbsttest, Wiederherstellungspunkt, Windows-Reparatur mit vorgewähltem Profil sowie letztes Protokoll bzw. Zustand lesen. Jeder Vorschlag erscheint als Karte "Ausführen? Ja/Nein". Befehle aus Claudes Text führt PC-Tools nie aus.', 'Ohne Schlüssel: In Claude.ai fragen|Kopiert Frage, Anhänge und die freigegebenen PC-Infos in die Zwischenablage und öffnet claude.ai im Browser - dort einfügen (Strg+V) und absenden. Funktioniert mit jedem kostenlosen oder bezahlten Claude-Konto.')
        Tip = 'Je genauer die Frage, desto besser die Antwort: "Seit dem letzten Update startet Outlook nicht mehr" hilft mehr als "Outlook geht nicht".' }
     @{ Tab = 'TabAssistant'; Glyph = '&#xE8D7;'; Color = '#D97757'; Title = 'KI-Assistent: Schlüssel, Kosten und Datenschutz'; Intro = 'Was du für Antworten direkt im Programm brauchst, was es kostet und welche Daten das Haus verlassen.'
-       Items = @('API-Schlüssel|In console.anthropic.com (Konto mit Guthaben) unter API Keys einen Schlüssel erzeugen, rechts unter "Verbindung zu Claude" einfügen und speichern. Er wird mit dem Windows-Datenschutz (DPAPI) verschlüsselt im Datenordner abgelegt - wahlweise nur für dein Windows-Konto oder für alle Konten dieses PCs -, nie wieder angezeigt und nie protokolliert. Auf dem USB-Stick gilt er nur an dem PC, an dem er gespeichert wurde. "Schlüssel testen" prüft die Verbindung und ob das gewählte Modell freigeschaltet ist.', 'Modell|Haiku (Standard) ist schnell und günstig, Sonnet gründlicher, Opus das stärkste und teuerste Modell. Das Modell lässt sich oben rechts im Assistenten umstellen.', 'Verbrauch und Limit|PC-Tools zählt je Monat die Token, die Anthropic in jeder Antwort meldet (Eingabe + Ausgabe). Mit einem Monatslimit hört der Assistent auf, sobald es erreicht ist. "Max. Länge einer Antwort" begrenzt jede einzelne Antwort. Lange Gespräche werden automatisch vorne gekürzt.', 'Datenschutz|Gesendet wird nur nach deiner ausdrücklichen Frage - und nur, was du rechts anhakst: aktuelle Seite, Systemübersicht (ohne Seriennummer und Computername), Zustand und Score, letzter Lauf, Anhänge. Kennwörter, Token, Product Keys und Benutzernamen in Pfaden werden vorher unkenntlich gemacht. "Vorschau: was würde gesendet?" zeigt alles vorab. Der Gesprächsverlauf bleibt nur im Arbeitsspeicher.', 'Fehlermeldungen|401 = Schlüssel ungültig, 429 = zu viele Anfragen (kurz warten), 529 = Claude überlastet (später erneut, wird einmal automatisch wiederholt), Netzwerk/Proxy = Internetverbindung oder Proxy prüfen (Netzwerk-Diagnose). Bei Fehlern gibt es "Nochmal versuchen".')
+       Items = @('KI-Anbieter|Rechts unter "Verbindung zur KI" wählst du per Dropdown, welche KI antwortet. Komplett kostenlos und ohne Konto: Ollama - die KI läuft dann auf deinem PC ("Ollama einrichten" installiert sie und lädt das Modell; ab ca. 8 GB Arbeitsspeicher, mit Grafikkarte schneller), deine Fragen verlassen den PC nicht. Kostenlos mit Gratis-Konto: Groq und OpenRouter (Tageslimits), Mistral (EU-Server, Gratis-Testtarif). Bezahlt: Claude (Anthropic), ChatGPT (OpenAI), Gemini (Google). "Andere KI / eigener Server" passt zu jeder OpenAI-kompatiblen Schnittstelle (z.B. LM Studio, DeepSeek, Azure).', 'API-Schlüssel|Für Anbieter mit Konto den Schlüssel beim Anbieter erzeugen (Link unter dem Feld), einfügen und speichern. Er wird je Anbieter getrennt mit dem Windows-Datenschutz (DPAPI) verschlüsselt im Datenordner abgelegt - wahlweise nur für dein Windows-Konto oder für alle Konten dieses PCs -, nie wieder angezeigt und nie protokolliert. "Verbindung testen" prüft Schlüssel und Modell.', 'Modell|Je Anbieter gibt es eine Vorschlagsliste; ein anderer Modellname lässt sich eintippen. PC-Tools merkt sich das Modell je Anbieter. Bei Claude: Haiku schnell und günstig, Sonnet gründlicher, Opus am stärksten.', 'Verbrauch und Limit|PC-Tools zählt je Monat die Token, die der KI-Anbieter in jeder Antwort meldet (Eingabe + Ausgabe). Mit einem Monatslimit hört der Assistent auf, sobald es erreicht ist. "Max. Länge einer Antwort" begrenzt jede einzelne Antwort. Lange Gespräche werden automatisch vorne gekürzt.', 'Datenschutz|Gesendet wird nur nach deiner ausdrücklichen Frage - und nur, was du rechts anhakst: aktuelle Seite, Systemübersicht (ohne Seriennummer und Computername), Zustand und Score, letzter Lauf, Anhänge. Kennwörter, Token, Product Keys und Benutzernamen in Pfaden werden vorher unkenntlich gemacht. "Vorschau: was würde gesendet?" zeigt alles vorab. Der Gesprächsverlauf bleibt nur im Arbeitsspeicher.', 'Fehlermeldungen|401 = Schlüssel ungültig, 429 = zu viele Anfragen (kurz warten), 529 = Claude überlastet (später erneut, wird einmal automatisch wiederholt), Netzwerk/Proxy = Internetverbindung oder Proxy prüfen (Netzwerk-Diagnose). Bei Fehlern gibt es "Nochmal versuchen".')
        Tip = 'Für Firmen-PCs: Mit "Monatslimit" und dem günstigen Standardmodell bleiben die Kosten planbar - typische Fragen kosten nur Bruchteile eines Cents.' }
     @{ Tab = 'TabFleet'; Glyph = '&#xE977;'; Color = '#4F46E5'; Title = 'Meine PCs und Handy-Benachrichtigungen'; Intro = 'Alle eigenen PCs auf einer Seite - und eine Nachricht aufs Handy, wenn einer Hilfe braucht.'
        Items = @('Gemeinsamer Ordner|Ein Ordner auf dem NAS oder in OneDrive, den alle PCs erreichen. Jeder PC legt dort nach jeder Pflege und jeder Ampel-Prüfung eine kleine Statusdatei ab (Zustand, freier Platz, Updates, Sicherung, Version).', 'Kacheln|Jeder PC als Kachel mit Ampelfarbe und Alter der Meldung. Anklicken zeigt Details; von dort per Remotedesktop verbinden.', 'ntfy|Kostenlose App (ntfy.sh) - ein eigenes, schwer zu erratendes Thema ausdenken, in der App abonnieren und hier eintragen.', 'Home Assistant|Webhook-Adresse einer Automation eintragen - die Meldung kommt als JSON (Titel, Text, Stufe, PC).', 'Chat|Webhook für Discord, Slack oder Teams.', 'Wann?|Wählbar: Ampel wird rot, Warnungen, Sicherung fehlgeschlagen, Bluescreen, und wenn wieder alles gut ist. Jede Meldung kommt nur einmal, nicht bei jeder Prüfung erneut.')
@@ -23437,7 +23595,7 @@ $(New-CcBanner '&#xE71D;' '#2D7FF9' 'Programme deinstallieren - und was übrig b
   <StackPanel>
     <StackPanel Orientation="Horizontal" Margin="0,0,0,8"><Border Width="4" Height="16" CornerRadius="2" Margin="0,0,10,0" VerticalAlignment="Center" Background="{StaticResource AccentGrad}"/><TextBlock Text="Nicht genutzte Programme" FontSize="16" FontWeight="SemiBold" Foreground="#1F2A44" VerticalAlignment="Center"/></StackPanel>
     <TextBlock Text="Findet Programme, die lange nicht gestartet wurden (Windows merkt sich Programmstarts aller Benutzer). Laufzeiten, Treiber, Sicherheits-, Sicherungs-, VPN-, Fernwartungs-, Office- und Druckerprogramme werden nie vorgeschlagen. Nach einer einzigen Bestätigung werden alle angehakten Programme nacheinander still deinstalliert - mit Wiederherstellungspunkt; Reste (Ordner in den Papierkorb, Registry mit Sicherung) und verwaiste Verknüpfungen werden gleich mit entfernt." Foreground="#6B7890" FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,8"/>
-    <WrapPanel Margin="0,0,0,6"><TextBlock Text="Nicht benutzt seit" VerticalAlignment="Center" Margin="0,0,8,8"/>$(New-Combo 'UnDays' @('90 Tagen', '180 Tagen', '1 Jahr', '2 Jahren') 120)<Button x:Name="BtnUnScan" Content="Nicht genutzte Programme suchen" Padding="14,6" Margin="0,0,8,8"/><Button x:Name="BtnUnRemove" Content="Angehakte jetzt entfernen (samt Resten)" Style="{StaticResource Sec}" Padding="14,6" Margin="0,0,8,8" IsEnabled="False"/></WrapPanel>
+    <WrapPanel Margin="0,0,0,6"><TextBlock Text="Nicht benutzt seit" VerticalAlignment="Center" Margin="0,0,8,8"/>$((New-Combo 'UnDays' @('5 Tagen', '7 Tagen', '14 Tagen', '30 Tagen', '60 Tagen', '90 Tagen', '180 Tagen', '1 Jahr', '2 Jahren') 120) -replace 'SelectedIndex="0"', 'SelectedIndex="5"')<Button x:Name="BtnUnScan" Content="Nicht genutzte Programme suchen" Padding="14,6" Margin="0,0,8,8"/><Button x:Name="BtnUnRemove" Content="Angehakte jetzt entfernen (samt Resten)" Style="{StaticResource Sec}" Padding="14,6" Margin="0,0,8,8" IsEnabled="False"/></WrapPanel>
     <ProgressBar x:Name="UnProg" Height="4" IsIndeterminate="True" Foreground="#2D7FF9" Background="#EEF2F8" BorderThickness="0" Margin="0,0,0,6" Visibility="Collapsed"/>
     <TextBlock x:Name="UnState" Text="" Foreground="#1F2A44" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,0,0,6"/>
     $(New-White (New-CcCheckGrid 'UnGrid' @('Programm|Name|*', 'Herausgeber|Publisher|170', 'Zuletzt benutzt|LastText|110', 'Installiert|DateText|95', 'Größe|SizeText|85|Size', 'Hinweis|Status|*')) 'Height="260"')
@@ -23830,19 +23988,26 @@ if ($fdAt -gt 0) {
 }
 # ---------------------------------------------------------------- KI-Assistent (Seiten-XAML, Version 10.0) - braucht $AiModels aus dem Hauptteil
 $aiG = if ($PageGlyphs.ContainsKey('KI-Assistent')) { $PageGlyphs['KI-Assistent'] } else { @('&#xE99A;', '#D97757') }
-$aiModelItems = @($AiModels | ForEach-Object { '<ComboBoxItem Content="{0}" ToolTip="{1}"/>' -f (Esc $_), (Esc ([string]$AiModelHints[$_])) }) -join ''
-$aiSideXaml = (New-Card 'Verbindung zu Claude' @(
+$aiProvItems = @($AiProviders | ForEach-Object { '<ComboBoxItem Content="{0}" Tag="{1}"/>' -f (Esc $_.Label), (Esc $_.Id) }) -join ''
+$aiSideXaml = (New-Card 'Verbindung zur KI' @(
         '<Grid Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Ellipse x:Name="AiKeyDot" Width="10" Height="10" Fill="#9AA5B8" VerticalAlignment="Top" Margin="0,4,8,0"/><TextBlock x:Name="AiKeyState" Grid.Column="1" Text="..." Foreground="#1F2A44" TextWrapping="Wrap"/></Grid>',
-        '<TextBlock Text="API-Schlüssel (Anthropic)" FontWeight="SemiBold" Foreground="#1F2A44" Margin="0,4,0,3"/>',
-        '<PasswordBox x:Name="AiKeyBox" Padding="5,5" ToolTip="Schlüssel aus console.anthropic.com einfügen (beginnt mit sk-ant-). Er wird verschlüsselt gespeichert und nie wieder angezeigt."/>',
-        '<WrapPanel Margin="0,8,0,0"><Button x:Name="AiBtnKeySave" Content="Speichern" Padding="12,6" Margin="0,0,6,6"/><Button x:Name="AiBtnKeyTest" Content="Schlüssel testen" Style="{StaticResource Sec}" Padding="12,6" Margin="0,0,6,6"/><Button x:Name="AiBtnKeyRemove" Content="Entfernen" Style="{StaticResource Sec}" Padding="12,6" Margin="0,0,6,6"/></WrapPanel>',
-        '<TextBlock x:Name="AiKeyTestInfo" Text="" Foreground="#6B7890" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,4"/>',
+        '<TextBlock Text="KI-Anbieter" FontWeight="SemiBold" Foreground="#1F2A44" Margin="0,4,0,3"/>',
+        ('<ComboBox x:Name="AiProvider" SelectedIndex="0" ToolTip="Kostenlose und bezahlte KI-Dienste - jederzeit umstellbar. Schlüssel werden je Anbieter getrennt gespeichert.">{0}</ComboBox>' -f $aiProvItems),
+        '<TextBlock x:Name="AiProvHint" Text="" Foreground="#6B7890" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0"/>',
+        '<StackPanel x:Name="AiUrlPanel" Visibility="Collapsed" Margin="0,8,0,0"><TextBlock Text="Adresse (bis /chat/completions)" Foreground="#6B7890" FontSize="12" Margin="0,0,0,3"/><TextBox x:Name="Assistant_CustomUrl" Padding="4,4" ToolTip="z.B. http://localhost:1234/v1/chat/completions (LM Studio) oder https://api.deepseek.com/v1/chat/completions"/></StackPanel>',
+        '<StackPanel x:Name="AiOllamaPanel" Visibility="Collapsed" Margin="0,8,0,0"><TextBlock x:Name="AiOllamaState" Text="" Foreground="#1F2A44" FontSize="12" TextWrapping="Wrap"/><WrapPanel Margin="0,6,0,0"><Button x:Name="AiBtnOllamaSetup" Content="Ollama einrichten" Padding="12,6" Margin="0,0,6,6" ToolTip="Installiert Ollama (falls nötig, per winget) und lädt das gewählte Modell herunter. Danach läuft die KI kostenlos auf diesem PC."/><Button x:Name="AiBtnOllamaCheck" Content="Prüfen" Style="{StaticResource Sec}" Padding="12,6" Margin="0,0,6,6"/></WrapPanel><ProgressBar x:Name="AiOllamaProg" Height="4" IsIndeterminate="True" Visibility="Collapsed" Margin="0,0,0,6"/></StackPanel>',
+        '<StackPanel x:Name="AiKeyPanel" Margin="0,8,0,0"><TextBlock x:Name="AiKeyLabel" Text="API-Schlüssel" FontWeight="SemiBold" Foreground="#1F2A44" Margin="0,0,0,3"/>',
+        '<PasswordBox x:Name="AiKeyBox" Padding="5,5" ToolTip="Schlüssel des gewählten Anbieters einfügen. Er wird verschlüsselt gespeichert und nie wieder angezeigt."/>',
+        '<WrapPanel Margin="0,8,0,0"><Button x:Name="AiBtnKeySave" Content="Speichern" Padding="12,6" Margin="0,0,6,6"/><Button x:Name="AiBtnKeyRemove" Content="Entfernen" Style="{StaticResource Sec}" Padding="12,6" Margin="0,0,6,6"/></WrapPanel>',
         '<TextBlock Text="Schlüssel lesbar für" Foreground="#6B7890" FontSize="12" Margin="0,4,0,3"/>',
-        '<ComboBox x:Name="Assistant_KeyScope" SelectedIndex="0"><ComboBoxItem Content="Nur mein Windows-Konto"/><ComboBoxItem Content="Alle Konten dieses PCs"/></ComboBox>',
+        '<ComboBox x:Name="Assistant_KeyScope" SelectedIndex="0"><ComboBoxItem Content="Nur mein Windows-Konto"/><ComboBoxItem Content="Alle Konten dieses PCs"/></ComboBox></StackPanel>',
         '<TextBlock Text="Modell" FontWeight="SemiBold" Foreground="#1F2A44" Margin="0,12,0,3"/>',
-        ('<ComboBox x:Name="Assistant_Model" SelectedIndex="0">{0}</ComboBox>' -f $aiModelItems),
+        '<ComboBox x:Name="AiModelBox" IsEditable="True" ToolTip="Aus der Liste wählen oder einen anderen Modellnamen des Anbieters eintippen."/>',
         '<TextBlock x:Name="AiModelHint" Text="" Foreground="#6B7890" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0"/>',
-        '<TextBlock Margin="0,10,0,0" FontSize="12" TextWrapping="Wrap" Foreground="#6B7890">Noch keinen Schlüssel? <Hyperlink x:Name="AiLinkConsole" Foreground="#2D7FF9">Bei Anthropic erstellen</Hyperlink> (Konto mit Guthaben nötig). Ohne Schlüssel funktioniert "In Claude.ai fragen".</TextBlock>'
+        '<WrapPanel Margin="0,8,0,0"><Button x:Name="AiBtnKeyTest" Content="Verbindung testen" Style="{StaticResource Sec}" Padding="12,6" Margin="0,0,6,6"/></WrapPanel>',
+        '<TextBlock x:Name="AiKeyTestInfo" Text="" Foreground="#6B7890" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,4"/>',
+        '<TextBox x:Name="Assistant_Provider" Visibility="Collapsed"/><TextBox x:Name="Assistant_Model" Visibility="Collapsed"/>',
+        '<TextBlock x:Name="AiLinkLine" Margin="0,6,0,0" FontSize="12" TextWrapping="Wrap" Foreground="#6B7890"><Hyperlink x:Name="AiLinkConsole" Foreground="#2D7FF9"><Run x:Name="AiLinkRun" Text="Schlüssel beim Anbieter erstellen"/></Hyperlink><Run Text=" - ohne Schlüssel funktioniert immer &quot;In Claude.ai fragen&quot; (Browser)."/></TextBlock>'
     )) +
 (New-Card 'Verbrauch diesen Monat' @(
         '<TextBlock x:Name="AiUsageBig" Text="0 Token" FontSize="22" FontWeight="SemiBold" Foreground="#1F2A44"/>',
@@ -23850,10 +24015,10 @@ $aiSideXaml = (New-Card 'Verbindung zu Claude' @(
         '<ProgressBar x:Name="AiUsageBar" Height="6" Minimum="0" Maximum="100" Value="0" Foreground="#D97757" Background="#EEF2F8" BorderThickness="0" Margin="0,0,0,8"/>',
         '<Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Monatslimit in Token (0 = kein Limit)" Foreground="#1F2A44" TextWrapping="Wrap" VerticalAlignment="Center"/><TextBox x:Name="Assistant_MonthlyLimit" Grid.Column="1" Width="90" TextAlignment="Right" Padding="3,3" Margin="8,0,0,0"/></Grid>',
         '<Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Max. Länge einer Antwort (Token)" Foreground="#1F2A44" TextWrapping="Wrap" VerticalAlignment="Center"/><TextBox x:Name="Assistant_MaxTokens" Grid.Column="1" Width="90" TextAlignment="Right" Padding="3,3" Margin="8,0,0,0"/></Grid>',
-        (New-Hint 'Ist das Limit erreicht, stellt der Assistent bis zum Monatsende keine Anfragen mehr. Gezählt wird, was Anthropic in jeder Antwort meldet (Eingabe + Ausgabe).')
+        (New-Hint 'Ist das Limit erreicht, stellt der Assistent bis zum Monatsende keine Anfragen mehr. Gezählt wird, was der KI-Anbieter in jeder Antwort meldet (Eingabe + Ausgabe). Bei Ollama (lokal) kostet nichts davon Geld.')
     )) +
 (New-Card 'Datenschutz: was wird gesendet?' @(
-        '<Border Background="#FFEDD5" CornerRadius="8" Padding="10,8" Margin="0,0,0,8"><TextBlock TextWrapping="Wrap" Foreground="#1F2A44" FontSize="12">Deine Frage und die hier eingeschalteten Angaben gehen an <Bold>Anthropic (USA)</Bold> und werden dort verarbeitet. Ohne Schlüssel und ohne deine ausdrückliche Frage wird nichts gesendet. Kennwörter, Schlüssel und Benutzernamen in Pfaden werden vorher unkenntlich gemacht.</TextBlock></Border>',
+        '<Border Background="#FFEDD5" CornerRadius="8" Padding="10,8" Margin="0,0,0,8"><TextBlock x:Name="AiPrivacyText" TextWrapping="Wrap" Foreground="#1F2A44" FontSize="12">Deine Frage und die hier eingeschalteten Angaben gehen an den gewählten KI-Anbieter und werden dort verarbeitet. Ohne deine ausdrückliche Frage wird nichts gesendet. Kennwörter, Schlüssel und Benutzernamen in Pfaden werden vorher unkenntlich gemacht.</TextBlock></Border>',
         (New-CheckRow 'Assistant_CtxPage' 'Aktuelle Seite' 'Welche Seite von PC-Tools gerade offen ist, dazu der passende Handbuch-Text.'),
         (New-CheckRow 'Assistant_CtxSystem' 'Systemübersicht' 'Windows-Version und Build, Gerätemodell, Prozessor, Arbeitsspeicher, freier Platz auf C:, Laufzeit, Sicherheit - ohne Seriennummer und Computername.'),
         (New-CheckRow 'Assistant_CtxHealth' 'Zustand und Score' 'Zustands-Score mit Teilwerten und die Punkte der Ampel (z.B. Speicher knapp).'),
@@ -23874,7 +24039,7 @@ $pageAssistant = @"
     <StackPanel Grid.Column="1">
       <TextBlock Text="KI-Assistent" FontSize="28" FontWeight="SemiBold" Foreground="#1F2A44"/>
       <Border Width="64" Height="4" CornerRadius="2" HorizontalAlignment="Left" Margin="0,6,0,0" Background="{StaticResource AccentGrad}"/>
-      <TextBlock Text="Frag Claude zu deinem PC und zu PC-Tools - in einfachen Worten. Vorschläge für Aktionen führt PC-Tools erst aus, wenn du sie bestätigst." FontSize="13.5" Foreground="#6B7890" Margin="0,10,0,0" TextWrapping="Wrap" MaxWidth="900" HorizontalAlignment="Left"/>
+      <TextBlock Text="Frag die KI zu deinem PC und zu PC-Tools - in einfachen Worten. Vorschläge für Aktionen führt PC-Tools erst aus, wenn du sie bestätigst." FontSize="13.5" Foreground="#6B7890" Margin="0,10,0,0" TextWrapping="Wrap" MaxWidth="900" HorizontalAlignment="Left"/>
     </StackPanel>
     <StackPanel Grid.Column="2" VerticalAlignment="Top" HorizontalAlignment="Right">
       <Border x:Name="AiModeChip" CornerRadius="14" Padding="12,5" Background="#EEF2F8" HorizontalAlignment="Right" Margin="0,0,0,8">
@@ -23900,7 +24065,7 @@ $pageAssistant = @"
                 <StackPanel Orientation="Horizontal">
                   <Border Width="40" Height="40" CornerRadius="20" Background="#D97757" Margin="0,0,12,0"><TextBlock Text="&#xE99A;" FontFamily="Segoe MDL2 Assets" FontSize="19" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
                   <StackPanel VerticalAlignment="Center">
-                    <TextBlock Text="Hallo! Ich bin Claude, dein PC-Tools-Assistent." FontSize="17" FontWeight="SemiBold" Foreground="#1F2A44"/>
+                    <TextBlock Text="Hallo! Ich bin dein PC-Tools-Assistent." FontSize="17" FontWeight="SemiBold" Foreground="#1F2A44"/>
                     <TextBlock Text="Frag mich, was dein PC gerade hat, was eine Meldung bedeutet oder welche Funktion dir hilft." Foreground="#6B7890" TextWrapping="Wrap"/>
                   </StackPanel>
                 </StackPanel>
@@ -38218,7 +38383,7 @@ $ui.BtnCcLeftClose.Add_Click({ $ui.CcLeftCard.Visibility = 'Collapsed' })
 # ---------------------------------------------------------------- Nicht genutzte Programme
 $script:UnRun = {
     if ($script:CcPrgBusy) { Show-UiError 'Es läuft bereits eine Deinstallation - bitte warten.'; return }
-    $days = @(90, 180, 365, 730)[[math]::Max(0, $ui.UnDays.SelectedIndex)]
+    $days = @(5, 7, 14, 30, 60, 90, 180, 365, 730)[[math]::Max(0, $ui.UnDays.SelectedIndex)]; $script:UnDaysLast = $days
     $ui.BtnUnScan.IsEnabled = $false; $ui.BtnUnRemove.IsEnabled = $false; $ui.UnProg.Visibility = 'Visible'; $ui.UnState.Text = 'Suche nicht genutzte Programme ... (wertet Programmstarts aller Benutzer aus, ca. 10-30 Sekunden)'
     Invoke-Bg -Script { param($d, $rx) $UnusedProtect = $rx; Get-UnusedPrograms $d } -Arguments @($days, $UnusedProtect) -Functions (@('Get-ProgUsageMap', 'Get-ProgExeNames', 'Get-SilentUninstallCmd', 'Get-UnusedPrograms') + $CcBgFunctions) -Done {
         param($r, $err)
@@ -38228,7 +38393,7 @@ $script:UnRun = {
         Set-GridItems $ui.UnGrid $rows
         $sel = @($rows | Where-Object { $_.Sel })
         $ui.BtnUnRemove.IsEnabled = [bool]$rows.Count
-        $ui.UnState.Text = if ($rows.Count) { '{0} Programme gefunden, {1} davon vorausgewählt (still entfernbar, Nutzung sicher erkannt). Häkchen bei Bedarf anpassen, dann "Angehakte jetzt entfernen".' -f $rows.Count, $sel.Count } else { 'Keine nicht genutzten Programme gefunden.' }
+        $ui.UnState.Text = if ($rows.Count) { ('{0} Programme gefunden, {1} davon vorausgewählt (still entfernbar, Nutzung sicher erkannt). Häkchen bei Bedarf anpassen, dann "Angehakte jetzt entfernen".' -f $rows.Count, $sel.Count) + $(if ($script:UnDaysLast -lt 30) { ' Achtung: kurzer Zeitraum - darunter können auch Programme sein, die du nur selten brauchst. Liste bitte kurz prüfen.' } else { '' }) } else { 'Keine nicht genutzten Programme gefunden.' }
     }
 }
 $ui.BtnUnScan.Add_Click({ & $script:UnRun })
@@ -40062,7 +40227,7 @@ $script:AiAttach = [System.Collections.Generic.List[object]]::new()      # Anhä
 $script:AiBusy = $false; $script:AiPending = $null; $script:AiRounds = 0; $script:AiFailedMsg = $null
 $script:AiLastTab = $ui.TabOverview; $script:AiLastPage = 'Übersicht'
 $script:AiTypingEl = $null; $script:AiTypingDots = $null; $script:AiTypingN = 0
-$script:AiKeyTesting = $false; $script:AiTestModel = ''; $script:AiTestFromBox = $false; $script:AiErrAsk = $false; $script:AiOpened = $false
+$script:AiKeyTesting = $false; $script:AiTestModel = ''; $script:AiTestName = ''; $script:AiOllamaModels = @(); $script:AiTestFromBox = $false; $script:AiErrAsk = $false; $script:AiOpened = $false
 $AiStarters = @('Warum ist mein PC langsam?', 'Erkläre das letzte Protokoll', 'Ist mein PC sicher?', 'Was sollte ich heute am PC erledigen?', 'Mein WLAN bricht ständig ab - was kann ich tun?', 'Welche Funktionen von PC-Tools sollte ich regelmäßig nutzen?')
 $script:AiTypingTimer = New-Object System.Windows.Threading.DispatcherTimer
 $script:AiTypingTimer.Interval = [TimeSpan]::FromMilliseconds(380)
@@ -40083,8 +40248,12 @@ function Copy-AiText([string]$Text) {
 function New-AiActRes([string]$Text, [bool]$IsError = $false, [string]$Show = '') { [pscustomobject]@{ Text = $Text; IsError = $IsError; Show = $(if ($Show) { $Show } else { $Text }) } }
 function Add-AiEntry([string]$Role, [string]$Text) { $script:AiEntries.Add([pscustomobject]@{ Role = $Role; Time = (Get-Date); Text = $Text }) }
 function Get-AiSettings {
-    $s = [pscustomobject]@{ Model = $AiModels[0]; Limit = [long]0; MaxTokens = 1024; Page = $true; System = $false; Health = $false; Log = $false; Attach = $true; ErrorButton = $true; Scope = 'CurrentUser' }
-    try { if ($ui.Assistant_Model.SelectedItem) { $s.Model = [string]$ui.Assistant_Model.SelectedItem.Content } } catch { }
+    $pid0 = 'ollama'; try { if ($ui.AiProvider.SelectedItem) { $pid0 = [string]$ui.AiProvider.SelectedItem.Tag } } catch { }
+    $pv = Get-AiProvider $pid0
+    $s = [pscustomobject]@{ Provider = $pv.Id; Prov = $pv; Kind = $pv.Kind; Url = $pv.Url; Model = ''; Limit = [long]0; MaxTokens = 1024; Page = $true; System = $false; Health = $false; Log = $false; Attach = $true; ErrorButton = $true; Scope = 'CurrentUser' }
+    try { $s.Model = ([string]$ui.AiModelBox.Text).Trim() } catch { }
+    if (-not $s.Model -and @($pv.Models).Count) { $s.Model = [string]@($pv.Models)[0] }
+    if ($pv.Id -eq 'custom') { $s.Url = ([string]$ui.Assistant_CustomUrl.Text).Trim() }
     $n = [long]0; if ([long]::TryParse((([string]$ui.Assistant_MonthlyLimit.Text) -replace '[^\d]', ''), [ref]$n) -and $n -ge 0) { $s.Limit = $n }
     $m = 0; if ([int]::TryParse((([string]$ui.Assistant_MaxTokens.Text) -replace '[^\d]', ''), [ref]$m) -and $m -ge 64) { $s.MaxTokens = [int][math]::Min(16000, [double]$m) }
     $s.Page = [bool]$ui.Assistant_CtxPage.IsChecked; $s.System = [bool]$ui.Assistant_CtxSystem.IsChecked; $s.Health = [bool]$ui.Assistant_CtxHealth.IsChecked
@@ -40098,7 +40267,10 @@ function Save-AiSettings {
         $c = Read-PflegeConfig
         if (-not $c.PSObject.Properties['Assistant']) { return }
         $s = Get-AiSettings
-        $c.Assistant.Model = $s.Model; $c.Assistant.MonthlyLimit = [int][math]::Min([double]2147483647, [double]$s.Limit); $c.Assistant.MaxTokens = [int]$s.MaxTokens
+        $map = ConvertFrom-AiModelMap ([string]$ui.Assistant_Model.Text); if ($s.Model) { $map[$s.Provider] = $s.Model }
+        $ui.Assistant_Model.Text = ConvertTo-AiModelMap $map; $ui.Assistant_Provider.Text = $s.Provider
+        foreach ($kv in @(@('Provider', $s.Provider), @('Model', [string]$ui.Assistant_Model.Text), @('CustomUrl', ([string]$ui.Assistant_CustomUrl.Text).Trim()))) { $c.Assistant | Add-Member -NotePropertyName $kv[0] -NotePropertyValue $kv[1] -Force }
+        $c.Assistant.MonthlyLimit = [int][math]::Min([double]2147483647, [double]$s.Limit); $c.Assistant.MaxTokens = [int]$s.MaxTokens
         $c.Assistant.KeyScope = [string]$ui.Assistant_KeyScope.SelectedItem.Content
         $c.Assistant.CtxPage = $s.Page; $c.Assistant.CtxSystem = $s.System; $c.Assistant.CtxHealth = $s.Health; $c.Assistant.CtxLog = $s.Log
         $c.Assistant.CtxSelection = $s.Attach; $c.Assistant.ErrorButton = $s.ErrorButton
@@ -40158,7 +40330,7 @@ function Update-AiCtxLabel {
     if ($s.Health) { $parts.Add('Zustand und Score') }
     if ($s.Log) { $parts.Add('letzter Lauf') }
     if ($script:AiAttach.Count) { $parts.Add(('{0} Anhang/Anhänge' -f $script:AiAttach.Count)) }
-    $ui.AiCtxLabel.Text = $(if ($parts.Count) { 'Wird mit der Frage an Anthropic gesendet: ' + ($parts -join ', ') } else { 'Wird gesendet: nur deine Frage und der Gesprächsverlauf' })
+    $ui.AiCtxLabel.Text = $(if ($parts.Count) { ('Wird mit der Frage an {0} gesendet: ' -f $s.Prov.Where) + ($parts -join ', ') } else { 'Wird gesendet: nur deine Frage und der Gesprächsverlauf' })
 }
 
 # ---- Darstellung (Blasen, Markdown-light)
@@ -40292,7 +40464,7 @@ function Show-AiTyping {
     $bd = New-Object Windows.Controls.Border; $bd.Background = New-UiBrush 'White'; $bd.BorderBrush = New-UiBrush '#E2E7F0'; $bd.BorderThickness = '1'; $bd.CornerRadius = '4,14,14,14'; $bd.Padding = '14,9'; $bd.Margin = '10,0,0,0'
     [Windows.Controls.Grid]::SetColumn($bd, 1)
     $sp = New-Object Windows.Controls.StackPanel; $sp.Orientation = 'Horizontal'
-    $t = New-AiTb 13 '#6B7890'; $t.Text = 'Claude denkt nach'; [void]$sp.Children.Add($t)
+    $t = New-AiTb 13 '#6B7890'; $t.Text = 'Die KI denkt nach'; [void]$sp.Children.Add($t)
     $d = New-AiTb 13 '#D97757'; $d.Text = ' ○○○'; [void]$sp.Children.Add($d)
     $bd.Child = $sp; [void]$g.Children.Add($bd)
     $script:AiTypingEl = $g; $script:AiTypingDots = $d; $script:AiTypingN = 0
@@ -40326,7 +40498,7 @@ function Update-AiAttachUi {
 function Add-AiAttachment([string]$Label, [string]$Text) {
     if (-not ([string]$Text).Trim()) { return }
     if (-not $ui.Assistant_CtxSelection.IsChecked) {
-        if (-not (Confirm-Ui ("Anhänge sind in den Datenschutz-Einstellungen des Assistenten ausgeschaltet.`n`nDiesen Anhang (""{0}"") trotzdem mit der nächsten Frage an Anthropic senden?" -f $Label))) { return }
+        if (-not (Confirm-Ui ("Anhänge sind in den Datenschutz-Einstellungen des Assistenten ausgeschaltet.`n`nDiesen Anhang (""{0}"") trotzdem mit der nächsten Frage an den KI-Anbieter senden?" -f $Label))) { return }
     }
     $script:AiAttach.Add([pscustomobject]@{ Label = $Label; Text = (Limit-AiText ([string]$Text) 8000) })
     Update-AiAttachUi
@@ -40354,7 +40526,7 @@ function Add-AiToolCard($Use) {
     if ($det) { $dt = New-AiTb 13 '#1F2A44'; $dt.Text = $det; $dt.FontWeight = 'SemiBold'; [void]$sp.Children.Add($dt) }
     $ds = New-AiTb 12.5 '#6B7890'; $ds.Text = [string]$def.Desc; $ds.Margin = '0,2,0,0'; [void]$sp.Children.Add($ds)
     $kn = New-AiTb 12 '#B45309'; $kn.Margin = '0,4,0,0'
-    $kn.Text = $(switch ($def.Kind) { 'Read' { 'Dabei werden diese Daten an Claude (Anthropic) gesendet.' } 'Open' { 'Öffnet nur eine Seite - es wird nichts verändert.' } default { 'Startet eine Aufgabe in PC-Tools (wie der passende Knopf auf der Seite).' } })
+    $kn.Text = $(switch ($def.Kind) { 'Read' { 'Dabei werden diese Daten an den gewählten KI-Anbieter gesendet.' } 'Open' { 'Öffnet nur eine Seite - es wird nichts verändert.' } default { 'Startet eine Aufgabe in PC-Tools (wie der passende Knopf auf der Seite).' } })
     [void]$sp.Children.Add($kn)
     $bp = New-Object Windows.Controls.WrapPanel; $bp.Margin = '0,10,0,0'
     $q = New-AiTb 13.5; $q.Text = 'Ausführen?'; $q.FontWeight = 'SemiBold'; $q.VerticalAlignment = 'Center'; $q.Margin = '0,0,12,0'; [void]$bp.Children.Add($q)
@@ -40493,11 +40665,20 @@ function Invoke-AiAction($Use) {
     } catch { return (New-AiActRes ('Fehler bei der Ausführung: ' + $_.Exception.Message) $true) }
 }
 
-# ---- Anfrage an Claude (im Hintergrund)
+# ---- Bereit? (leer = ja, sonst Hinweistext)
+function Get-AiNotReadyText($S) {
+    $pv = $S.Prov
+    if ($pv.Id -eq 'custom' -and -not $S.Url) { return 'Für "Andere KI / eigener Server" bitte rechts unter "Verbindung zur KI" die Adresse eintragen.' }
+    if (-not $S.Model) { return 'Bitte rechts unter "Verbindung zur KI" ein Modell wählen oder eintragen.' }
+    if ($pv.NeedKey -and -not (Get-AiKey $DataDir $pv.Id)) { return ('Für {0} ist ein API-Schlüssel nötig (rechts unter "Verbindung zur KI"). Komplett kostenlos und ohne Konto: oben "Ollama" wählen. Ohne alles: "In Claude.ai fragen" öffnet den Browser.' -f $pv.Name) }
+    return ''
+}
+# ---- Anfrage an die KI (im Hintergrund)
 function Invoke-AiRequest {
     $s = Get-AiSettings
-    $key = Get-AiKey $DataDir
-    if (-not $key) { Add-AiNote 'Kein lesbarer API-Schlüssel hinterlegt - bitte rechts unter "Verbindung zu Claude" einfügen oder "In Claude.ai fragen" nutzen.' 'Warn'; return }
+    $key = Get-AiKey $DataDir $s.Provider
+    $why = Get-AiNotReadyText $s
+    if ($why) { Add-AiNote $why 'Warn'; Set-AiSidebar $true; return }
     $u = Get-AiUsage (Get-AiUsageFile $DataDir)
     if (Test-AiLimitReached $u $s.Limit) { Add-AiNote ('Das Monatslimit von {0:N0} Token ist erreicht - der Assistent pausiert bis zum nächsten Monat. Limit rechts unter "Verbrauch" ändern oder "In Claude.ai fragen" nutzen.' -f $s.Limit) 'Warn'; return }
     $trim = Limit-AiHistory $script:AiHistory.ToArray() $AiMaxHistoryChars
@@ -40505,11 +40686,12 @@ function Invoke-AiRequest {
     $pages = @(Get-AiPageList)
     $sys = Get-AiSystemPrompt $AppVersion (Get-AiFeatureText $pages $ManualChapters) (New-AiContextText (Get-AiContextParts $s))
     $tools = Get-AiToolDefs $pages $WrProfiles
-    $json = New-AiRequestBody $s.Model $sys $script:AiHistory.ToArray() $tools.ToArray() $s.MaxTokens
+    $json = if ($s.Kind -eq 'anthropic') { New-AiRequestBody $s.Model $sys $script:AiHistory.ToArray() $tools.ToArray() $s.MaxTokens } else { New-AiOpenAiBody $s.Model $sys $script:AiHistory.ToArray() $tools.ToArray() $s.MaxTokens ([string]$s.Prov.TokField) }
+    $toSec = $(if ($s.Prov.Local -or $s.Provider -eq 'custom') { 600 } else { 150 })
     $bytes = [Text.Encoding]::UTF8.GetBytes($json)
     $script:AiBusy = $true; Update-AiSendState; Show-AiTyping
-    $ui.StatusText.Text = 'KI-Assistent: Claude antwortet ...'
-    Invoke-Bg -Script { param($k, $b, $url, $ver) Invoke-AiMessages $k $b $url $ver } -Arguments @($key, $bytes, $AiApiUrl, $AiApiVersion) -Functions @('Invoke-AiMessages', 'Invoke-AiHttp') -Done {
+    $ui.StatusText.Text = ('KI-Assistent: {0} antwortet ...{1}' -f $s.Prov.Name, $(if ($s.Prov.Local) { ' (lokal - die erste Antwort kann etwas dauern)' } else { '' }))
+    Invoke-Bg -Script { param($k, $b, $url, $ver, $kind, $to) Invoke-AiMessages $k $b $url $ver $kind $to } -Arguments @([string]$key, $bytes, $s.Url, $AiApiVersion, $s.Kind, $toSec) -Functions @('Invoke-AiMessages', 'Invoke-AiHttp') -Done {
         param($r, $err)
         Complete-AiRequest $r $err
     }
@@ -40534,9 +40716,14 @@ function Complete-AiRequest($R, $Err) {
     $script:AiBusy = $false; Update-AiSendState
     $res = $null; foreach ($x in @($R)) { if ($x -and $x.PSObject.Properties['Status']) { $res = $x } }
     if ($Err -or -not $res) { Add-AiFail ('Interner Fehler: ' + $(if ($Err) { $Err.Message } else { 'keine Antwort erhalten' })); return }
-    if ([int]$res.Status -ne 200) { Add-AiFail (Get-AiErrorText ([int]$res.Status) ([string]$res.Body) ([string]$res.Error)); return }
+    $cs = Get-AiSettings
+    if ([int]$res.Status -ne 200) {
+        if ($cs.Provider -eq 'ollama' -and [int]$res.Status -eq 0) { Add-AiFail 'Ollama antwortet nicht - ist es installiert und gestartet? Rechts unter "Verbindung zur KI" auf "Ollama einrichten" klicken.'; return }
+        if ($cs.Provider -eq 'ollama' -and [int]$res.Status -eq 404) { Add-AiFail ('Das Modell {0} ist in Ollama noch nicht geladen. Rechts auf "Ollama einrichten" klicken (lädt es herunter).' -f $cs.Model); return }
+        Add-AiFail (Get-AiErrorText ([int]$res.Status) ([string]$res.Body) ([string]$res.Error) ([string]$cs.Prov.Name)); return
+    }
     $p = $null
-    try { $p = ConvertFrom-AiResponse ([string]$res.Body) } catch { Add-AiFail ('Die Antwort von Anthropic ist nicht lesbar: ' + $_.Exception.Message); return }
+    try { $p = ConvertFrom-AiResponse ([string]$res.Body) } catch { Add-AiFail ('Die Antwort von {0} ist nicht lesbar: {1}' -f $cs.Prov.Name, $_.Exception.Message); return }
     try { $null = Add-AiUsage (Get-AiUsageFile $DataDir) $p.InTokens $p.OutTokens; Update-AiUsageUi } catch { }
     $script:AiHistory.Add([ordered]@{ role = 'assistant'; content = $p.Content })
     $note = ''
@@ -40550,10 +40737,8 @@ function Send-AiQuestion([string]$Text, [switch]$FromInput) {
     $q = ([string]$Text).Trim()
     if (-not $q) { return }
     if ($script:AiBusy) { $ui.StatusText.Text = 'Der Assistent antwortet noch - bitte einen Moment.'; return }
-    if (-not (Get-AiKey $DataDir)) {
-        Add-AiNote 'Für Antworten direkt hier ist ein API-Schlüssel nötig (rechts unter "Verbindung zu Claude"). Ohne Schlüssel: "In Claude.ai fragen" kopiert Frage und PC-Infos und öffnet claude.ai im Browser.' 'Warn'
-        Set-AiSidebar $true; return
-    }
+    $why = Get-AiNotReadyText (Get-AiSettings)
+    if ($why) { Add-AiNote $why 'Warn'; Set-AiSidebar $true; return }
     $s = Get-AiSettings
     if (Test-AiLimitReached (Get-AiUsage (Get-AiUsageFile $DataDir)) $s.Limit) { Add-AiNote ('Das Monatslimit von {0:N0} Token ist erreicht - der Assistent pausiert bis zum nächsten Monat.' -f $s.Limit) 'Warn'; return }
     $att = @($script:AiAttach.ToArray())
@@ -40591,7 +40776,7 @@ function Invoke-AiClaudeAi {
     $ui.AiInput.Clear(); $script:AiAttach.Clear(); Update-AiAttachUi
 }
 function Invoke-AiChip([string]$Question) {
-    if (Get-AiKey $DataDir) { Send-AiQuestion $Question }
+    if (-not (Get-AiNotReadyText (Get-AiSettings))) { Send-AiQuestion $Question }
     else { $ui.AiInput.Text = $Question; Invoke-AiClaudeAi }
 }
 function New-AiChips {
@@ -40631,26 +40816,38 @@ function Set-AiSidebar([bool]$On) {
     $ui.AiSideCol.Width = New-Object Windows.GridLength $(if ($On) { 340 } else { 0 })
 }
 function Update-AiKeyUi {
-    $st = Get-AiKeyState $DataDir
-    $s = Get-AiSettings
-    if ($st.Present -and $st.Readable) {
+    $s = Get-AiSettings; $pv = $s.Prov
+    $ui.AiProvHint.Text = ('{0} Daten gehen an: {1}.' -f $(if ($pv.Local) { 'Komplett kostenlos, ohne Konto.' } elseif ($pv.Free) { 'Kostenlos nutzbar (mit Gratis-Konto/Tageslimit).' } elseif ($pv.Id -eq 'custom') { '' } else { 'Kostenpflichtig (Abrechnung nach Verbrauch).' }), $pv.Where)
+    $ui.AiUrlPanel.Visibility = $(if ($pv.Id -eq 'custom') { 'Visible' } else { 'Collapsed' })
+    $ui.AiOllamaPanel.Visibility = $(if ($pv.Local) { 'Visible' } else { 'Collapsed' })
+    $ui.AiKeyPanel.Visibility = $(if ($pv.Local) { 'Collapsed' } else { 'Visible' })
+    $ui.AiKeyLabel.Text = $(if ($pv.NeedKey) { 'API-Schlüssel ({0})' -f $pv.Name } else { 'API-Schlüssel (nur falls der Server einen verlangt)' })
+    $ui.AiLinkLine.Visibility = $(if ($pv.KeyUrl) { 'Visible' } else { 'Collapsed' })
+    $ui.AiLinkRun.Text = $(if ($pv.Local) { 'Ollama-Webseite' } else { 'Schlüssel bei {0} erstellen' -f $pv.Name })
+    try { $ui.AiPrivacyText.Text = $(if ($pv.Local) { 'Ollama läuft auf diesem PC: Deine Frage und die eingeschalteten Angaben verlassen den Rechner nicht.' } else { 'Deine Frage und die hier eingeschalteten Angaben gehen an {0} und werden dort verarbeitet. Ohne deine ausdrückliche Frage wird nichts gesendet. Kennwörter, Schlüssel und Benutzernamen in Pfaden werden vorher unkenntlich gemacht.' -f $pv.Where }) } catch { }
+    $st = Get-AiKeyState $DataDir $pv.Id
+    $why = Get-AiNotReadyText $s
+    if ($pv.Local) {
         $ui.AiKeyDot.Fill = New-UiBrush '#16A34A'
-        $ui.AiKeyState.Text = ('API-Schlüssel hinterlegt (seit {0:dd.MM.yyyy}) - verschlüsselt mit dem Windows-Datenschutz (DPAPI) für {1}. Er wird nie wieder angezeigt und nirgends protokolliert.' -f $st.Date, $(if ($st.Scope -eq 'LocalMachine') { 'alle Konten dieses PCs' } else { 'dein Windows-Konto' }))
-        $ui.AiModeText.Text = 'Direkt mit Claude  ·  ' + $s.Model; $ui.AiModeDot.Fill = New-UiBrush '#16A34A'
-        $ui.AiWelcomeHint.Text = ''
-    } elseif ($st.Present) {
+        $ui.AiKeyState.Text = 'Kostenlose lokale KI (Ollama) gewählt - kein Schlüssel nötig.'
+        $ui.AiModeText.Text = 'Kostenlos lokal  ·  ' + $s.Model; $ui.AiModeDot.Fill = New-UiBrush '#16A34A'; $ui.AiWelcomeHint.Text = ''
+    } elseif (-not $why) {
+        $ui.AiKeyDot.Fill = New-UiBrush '#16A34A'
+        $ui.AiKeyState.Text = $(if ($st.Present) { ('API-Schlüssel für {0} hinterlegt (seit {1:dd.MM.yyyy}) - verschlüsselt mit dem Windows-Datenschutz (DPAPI) für {2}. Er wird nie wieder angezeigt und nirgends protokolliert.' -f $pv.Name, $st.Date, $(if ($st.Scope -eq 'LocalMachine') { 'alle Konten dieses PCs' } else { 'dein Windows-Konto' })) } else { 'Bereit (ohne Schlüssel).' })
+        $ui.AiModeText.Text = ('{0}  ·  {1}' -f $pv.Name, $s.Model); $ui.AiModeDot.Fill = New-UiBrush '#16A34A'; $ui.AiWelcomeHint.Text = ''
+    } elseif ($st.Present -and -not $st.Readable) {
         $ui.AiKeyDot.Fill = New-UiBrush '#EA580C'
         $ui.AiKeyState.Text = 'Ein gespeicherter Schlüssel ist hier nicht lesbar (anderer PC, anderes Windows-Konto oder beschädigt). Bitte den Schlüssel neu einfügen und speichern.'
         $ui.AiModeText.Text = 'Schlüssel nicht lesbar  ·  Claude.ai'; $ui.AiModeDot.Fill = New-UiBrush '#EA580C'
         $ui.AiWelcomeHint.Text = 'Der gespeicherte Schlüssel ist nicht lesbar - Vorschläge öffnen bis dahin Claude.ai im Browser.'
     } else {
         $ui.AiKeyDot.Fill = New-UiBrush '#9AA5B8'
-        $ui.AiKeyState.Text = 'Kein Schlüssel hinterlegt. Antworten direkt hier gibt es mit eigenem Anthropic-API-Schlüssel; "In Claude.ai fragen" funktioniert immer.'
-        $ui.AiModeText.Text = 'Ohne Schlüssel  ·  Claude.ai im Browser'; $ui.AiModeDot.Fill = New-UiBrush '#9AA5B8'
-        $ui.AiWelcomeHint.Text = 'Noch kein API-Schlüssel hinterlegt: Ein Klick auf einen Vorschlag kopiert die Frage und öffnet Claude.ai im Browser.'
+        $ui.AiKeyState.Text = $why
+        $ui.AiModeText.Text = 'Noch nicht eingerichtet  ·  Claude.ai im Browser'; $ui.AiModeDot.Fill = New-UiBrush '#9AA5B8'
+        $ui.AiWelcomeHint.Text = 'Noch nicht eingerichtet: Rechts einen KI-Anbieter wählen (z.B. kostenlos "Ollama"). Bis dahin öffnet ein Klick auf einen Vorschlag Claude.ai im Browser.'
     }
     $ui.AiBtnKeyRemove.IsEnabled = [bool]$st.Present
-    $ui.AiModelHint.Text = [string]$AiModelHints[$s.Model]
+    $ui.AiModelHint.Text = $(if ($pv.Id -eq 'anthropic') { [string]$AiModelHints[$s.Model] } elseif ($pv.Local) { 'qwen3:4b braucht ca. 8 GB Arbeitsspeicher (Download ca. 2,5 GB), qwen3:8b ca. 16 GB (5 GB), gpt-oss:20b ca. 24 GB. Mit Grafikkarte deutlich schneller.' } else { [string]$pv.KeyHint })
 }
 function Update-AiUsageUi {
     $s = Get-AiSettings; $u = Get-AiUsage (Get-AiUsageFile $DataDir)
@@ -40666,19 +40863,19 @@ function Update-AiUsageUi {
 function Update-AiOnOpen {
     try {
         if (-not $script:AiOpened) { $script:AiOpened = $true; try { New-AiChips } catch { } }
-        Update-AiKeyUi; Update-AiUsageUi; Update-AiCtxLabel
+        Update-AiKeyUi; Update-AiUsageUi; Update-AiCtxLabel; Update-AiOllamaUi
     } catch { }
 }
 function Show-AiPreview {
     $s = Get-AiSettings
     $ctx = New-AiContextText (Get-AiContextParts $s)
     $sb = New-Object Text.StringBuilder
-    [void]$sb.AppendLine('Mit jeder Frage gehen zusätzlich zu deiner Frage und dem bisherigen Gespräch diese Angaben an Anthropic:')
+    [void]$sb.AppendLine(('Mit jeder Frage gehen zusätzlich zu deiner Frage und dem bisherigen Gespräch diese Angaben an {0}:' -f $s.Prov.Where))
     [void]$sb.AppendLine()
     [void]$sb.AppendLine($(if ($ctx) { $ctx } else { '(keine - nur deine Frage und der Gesprächsverlauf)' }))
     foreach ($a in $script:AiAttach) { [void]$sb.AppendLine(); [void]$sb.AppendLine(('## Anhang: {0}' -f $a.Label)); [void]$sb.AppendLine((Protect-AiText ([string]$a.Text))) }
     [void]$sb.AppendLine()
-    [void]$sb.AppendLine('Immer dabei: Anweisungen für Claude (Rolle, Antwortstil, Liste der PC-Tools-Seiten und der erlaubten Aktionen) - ohne persönliche Daten.')
+    [void]$sb.AppendLine('Immer dabei: Anweisungen für die KI (Rolle, Antwortstil, Liste der PC-Tools-Seiten und der erlaubten Aktionen) - ohne persönliche Daten.')
     $x = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="KI-Assistent - Vorschau der gesendeten Daten" Width="760" Height="560" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI" FontSize="13" Background="#F4F6FA">
@@ -40802,7 +40999,7 @@ $ui.AiInput.Add_PreviewKeyDown({
     if ([string]$e.Key -eq 'Return' -and -not (([Windows.Input.Keyboard]::Modifiers -band [Windows.Input.ModifierKeys]::Shift) -ne 0)) { $e.Handled = $true; Invoke-AiSendInput }
 })
 $ui.AiBtnNew.Add_Click({
-    if ($script:AiBusy) { $ui.StatusText.Text = 'Bitte warten, bis Claude geantwortet hat.'; return }
+    if ($script:AiBusy) { $ui.StatusText.Text = 'Bitte warten, bis die KI geantwortet hat.'; return }
     if ($script:AiEntries.Count -and -not (Confirm-Ui 'Neues Gespräch beginnen? Der bisherige Verlauf wird verworfen (vorher bei Bedarf exportieren).')) { return }
     Reset-AiChat
 })
@@ -40815,27 +41012,33 @@ $ui.AiBtnExport.Add_Click({
 })
 $ui.AiBtnSidebar.Add_Click({ Set-AiSidebar ($ui.AiSide.Visibility -ne 'Visible') })
 $ui.AiBtnPreview.Add_Click({ try { Show-AiPreview } catch { Show-UiError $_.Exception.Message } })
-$ui.AiLinkConsole.Add_Click({ try { Start-Process 'https://console.anthropic.com/settings/keys' } catch { } })
+$ui.AiLinkConsole.Add_Click({ try { $u = [string](Get-AiSettings).Prov.KeyUrl; if ($u) { Start-Process $u } } catch { } })
 $ui.AiBtnKeySave.Add_Click({
     $k = [string]$ui.AiKeyBox.Password
     if (-not $k.Trim()) { $ui.AiKeyTestInfo.Text = 'Bitte zuerst den API-Schlüssel in das Feld einfügen.'; return }
+    $pv = (Get-AiSettings).Prov
     try {
-        if ($k.Trim() -notmatch '^sk-ant-' -and -not (Confirm-Ui 'Der Schlüssel beginnt nicht mit "sk-ant-" - Anthropic-API-Schlüssel sehen normalerweise so aus. Trotzdem speichern?')) { return }
-        $null = Save-AiKey $k $DataDir (Get-AiSettings).Scope
+        if ($pv.KeyPrefix -and $k.Trim() -notmatch ('^' + [regex]::Escape([string]$pv.KeyPrefix)) -and -not (Confirm-Ui ('Der Schlüssel beginnt nicht mit "{0}" - Schlüssel von {1} sehen normalerweise so aus. Trotzdem speichern?' -f $pv.KeyPrefix, $pv.Name))) { return }
+        $null = Save-AiKey $k $DataDir (Get-AiSettings).Scope $pv.Id
         $ui.AiKeyBox.Clear()
         Save-AiSettings; Update-AiKeyUi
-        $ui.AiKeyTestInfo.Text = 'Gespeichert. Tipp: "Schlüssel testen" prüft die Verbindung.'
+        $ui.AiKeyTestInfo.Text = 'Gespeichert. Tipp: "Verbindung testen" prüft Schlüssel und Modell.'
     } catch { $ui.AiKeyTestInfo.Text = 'Der Schlüssel konnte nicht gespeichert werden: ' + $_.Exception.Message }
     $k = $null
 })
 $ui.AiBtnKeyTest.Add_Click({
     if ($script:AiKeyTesting) { return }
+    $s = Get-AiSettings; $pv = $s.Prov
     $k = ([string]$ui.AiKeyBox.Password).Trim(); $script:AiTestFromBox = [bool]$k
-    if (-not $k) { $k = Get-AiKey $DataDir }
-    if (-not $k) { $ui.AiKeyTestInfo.Text = 'Kein Schlüssel zum Testen - bitte oben einfügen.'; return }
-    $script:AiKeyTesting = $true; $ui.AiBtnKeyTest.IsEnabled = $false; $ui.AiKeyTestInfo.Text = 'Teste die Verbindung zu Anthropic ...'
-    $script:AiTestModel = (Get-AiSettings).Model
-    Invoke-Bg -Script { param($key, $ver) Invoke-AiHttp 'GET' 'https://api.anthropic.com/v1/models?limit=100' @{ 'x-api-key' = $key; 'anthropic-version' = $ver } $null 30 } -Arguments @($k, $AiApiVersion) -Functions @('Invoke-AiHttp') -Done {
+    if (-not $k) { $k = [string](Get-AiKey $DataDir $pv.Id) }
+    if ($pv.NeedKey -and -not $k) { $ui.AiKeyTestInfo.Text = 'Kein Schlüssel zum Testen - bitte oben einfügen.'; return }
+    if (-not $s.Url) { $ui.AiKeyTestInfo.Text = 'Bitte zuerst die Adresse eintragen.'; return }
+    $script:AiKeyTesting = $true; $ui.AiBtnKeyTest.IsEnabled = $false; $ui.AiKeyTestInfo.Text = ('Teste die Verbindung zu {0} ...' -f $pv.Name)
+    $script:AiTestModel = $s.Model; $script:AiTestName = [string]$pv.Name
+    if ($pv.Kind -eq 'anthropic') { $tu = 'https://api.anthropic.com/v1/models?limit=100'; $th = @{ 'x-api-key' = $k; 'anthropic-version' = $AiApiVersion } }
+    else { $tu = (Get-AiBaseUrl $s.Url) + '/models'; $th = @{}; if ($k) { $th['Authorization'] = 'Bearer ' + $k } }
+    $tl = [bool]($tu -match '^https?://(localhost|127\.0\.0\.1)')
+    Invoke-Bg -Script { param($u, $h, $l) Invoke-AiHttp 'GET' $u $h $null 30 -NoProxy:$l } -Arguments @($tu, $th, $tl) -Functions @('Invoke-AiHttp') -Done {
         param($r, $err)
         $script:AiKeyTesting = $false; $ui.AiBtnKeyTest.IsEnabled = $true
         $res = $null; foreach ($x in @($r)) { if ($x -and $x.PSObject.Properties['Status']) { $res = $x } }
@@ -40843,19 +41046,92 @@ $ui.AiBtnKeyTest.Add_Click({
         if ([int]$res.Status -eq 200) {
             $ids = @(); try { $ids = @(($res.Body | ConvertFrom-Json).data | ForEach-Object { [string]$_.id }) } catch { }
             $mt = ''
-            if ($ids.Count) { $mt = $(if ($ids -contains $script:AiTestModel) { (' Das gewählte Modell {0} ist verfügbar.' -f $script:AiTestModel) } else { (' Achtung: Das gewählte Modell {0} ist für diesen Schlüssel nicht aufgeführt - verfügbar: {1}.' -f $script:AiTestModel, (($ids | Select-Object -First 8) -join ', ')) }) }
-            $ui.AiKeyTestInfo.Text = ([string][char]0x2713 + ' Schlüssel gültig - die Verbindung zu Anthropic funktioniert.' + $mt + $(if ($script:AiTestFromBox) { ' Noch nicht gespeichert: bitte "Speichern" klicken.' } else { '' }))
-        } else { $ui.AiKeyTestInfo.Text = Get-AiErrorText ([int]$res.Status) ([string]$res.Body) ([string]$res.Error) }
+            if ($ids.Count) {
+                $hit = ($ids -contains $script:AiTestModel) -or ($ids -contains ('models/' + $script:AiTestModel)) -or ($ids -contains ($script:AiTestModel + ':latest'))
+                $mt = $(if ($hit) { (' Das gewählte Modell {0} ist verfügbar.' -f $script:AiTestModel) } else { (' Achtung: Das Modell {0} ist nicht aufgeführt - verfügbar z.B.: {1}.' -f $script:AiTestModel, (($ids | Select-Object -First 8) -join ', ')) })
+            }
+            $ui.AiKeyTestInfo.Text = ([string][char]0x2713 + (' Verbindung zu {0} funktioniert.' -f $script:AiTestName) + $mt + $(if ($script:AiTestFromBox) { ' Schlüssel noch nicht gespeichert: bitte "Speichern" klicken.' } else { '' }))
+        } elseif ([int]$res.Status -eq 0 -and $script:AiTestName -eq 'Ollama') { $ui.AiKeyTestInfo.Text = 'Ollama antwortet nicht - bitte "Ollama einrichten" klicken.' }
+        else { $ui.AiKeyTestInfo.Text = Get-AiErrorText ([int]$res.Status) ([string]$res.Body) ([string]$res.Error) $script:AiTestName }
     }
     $k = $null
 })
 $ui.AiBtnKeyRemove.Add_Click({
-    if (-not (Confirm-Ui 'Den gespeicherten API-Schlüssel von diesem PC entfernen? Danach funktioniert nur noch "In Claude.ai fragen".')) { return }
-    try { Remove-AiKey $DataDir; $ui.AiKeyTestInfo.Text = 'Schlüssel entfernt.' } catch { $ui.AiKeyTestInfo.Text = 'Entfernen nicht möglich: ' + $_.Exception.Message }
+    $pv = (Get-AiSettings).Prov
+    if (-not (Confirm-Ui ('Den gespeicherten API-Schlüssel für {0} von diesem PC entfernen?' -f $pv.Name))) { return }
+    try { Remove-AiKey $DataDir $pv.Id; $ui.AiKeyTestInfo.Text = 'Schlüssel entfernt.' } catch { $ui.AiKeyTestInfo.Text = 'Entfernen nicht möglich: ' + $_.Exception.Message }
     Update-AiKeyUi
 })
+# ---- Anbieter / Modell
+$script:AiProvInit = $false
+function Set-AiModelList([string]$Id, [string]$Want = '') {
+    $pv = Get-AiProvider $Id
+    $ui.AiModelBox.Items.Clear()
+    $list = [System.Collections.Generic.List[string]]::new(); foreach ($m in @($pv.Models)) { if ($m -and -not $list.Contains([string]$m)) { $list.Add([string]$m) } }
+    if ($pv.Local -and $script:AiOllamaModels) { foreach ($m in @($script:AiOllamaModels)) { $mm = ([string]$m) -replace ':latest$', ''; if ($mm -and -not $list.Contains($mm)) { $list.Add($mm) } } }
+    foreach ($m in $list) { $it = New-Object Windows.Controls.ComboBoxItem; $it.Content = $m; if ($pv.Id -eq 'anthropic' -and $AiModelHints[$m]) { $it.ToolTip = [string]$AiModelHints[$m] }; [void]$ui.AiModelBox.Items.Add($it) }
+    if (-not $Want) { $Want = [string](ConvertFrom-AiModelMap ([string]$ui.Assistant_Model.Text))[$pv.Id] }
+    if (-not $Want -and $pv.Local) { try { $Want = Get-OllamaSuggestedModel } catch { } }
+    if (-not $Want -and $list.Count) { $Want = $list[0] }
+    $ui.AiModelBox.Text = [string]$Want
+}
+function Initialize-AiProvider {
+    $c = $null; try { $c = Read-PflegeConfig } catch { }
+    $id = ''; $mp = ''; $cu = ''
+    if ($c -and $c.Assistant) { $id = [string]$c.Assistant.Provider; $mp = [string]$c.Assistant.Model; $cu = [string]$c.Assistant.CustomUrl }
+    if (-not $id) { $id = $(if (Test-Path -LiteralPath (Get-AiKeyFile $DataDir 'anthropic')) { 'anthropic' } else { 'ollama' }) }
+    $ui.Assistant_Model.Text = $mp; $ui.Assistant_Provider.Text = $id; $ui.Assistant_CustomUrl.Text = $cu
+    foreach ($it in $ui.AiProvider.Items) { if ([string]$it.Tag -eq $id) { $ui.AiProvider.SelectedItem = $it } }
+    Set-AiModelList $id
+    $script:AiProvInit = $true
+}
+function Update-AiOllamaUi {
+    if (-not (Get-AiSettings).Prov.Local) { return }
+    $ui.AiOllamaState.Text = 'Prüfe Ollama ...'
+    Invoke-Bg -Script { Get-OllamaState } -Functions @('Get-OllamaState', 'Get-OllamaExe', 'Invoke-AiHttp') -Done {
+        param($r, $err)
+        $st = $null; foreach ($x in @($r)) { if ($x -and $x.PSObject.Properties['Running']) { $st = $x } }
+        if (-not $st) { $ui.AiOllamaState.Text = 'Status unbekannt.'; return }
+        $script:AiOllamaModels = @($st.Models)
+        $m = ([string]$ui.AiModelBox.Text).Trim()
+        $has = (@($st.Models) -contains $m) -or (@($st.Models) -contains ($m + ':latest'))
+        $ui.AiOllamaState.Text = $(if (-not $st.Installed) { 'Ollama ist noch nicht installiert. "Ollama einrichten" installiert es (ca. 1 GB) und lädt das Modell.' }
+            elseif (-not $st.Running) { 'Ollama ist installiert, läuft aber gerade nicht. "Ollama einrichten" startet es.' }
+            elseif (-not $has) { ('Ollama läuft. Das Modell {0} ist noch nicht geladen - "Ollama einrichten" lädt es herunter. Vorhanden: {1}' -f $m, $(if (@($st.Models).Count) { @($st.Models) -join ', ' } else { 'keins' })) }
+            else { ([string][char]0x2713 + (' Ollama läuft, Modell {0} ist bereit. Alles kostenlos und lokal.' -f $m)) })
+        $ui.AiBtnOllamaSetup.IsEnabled = -not ($st.Running -and $has)
+    }
+}
+$ui.AiProvider.Add_SelectionChanged({
+    param($sd, $e)
+    $e.Handled = $true
+    if (-not $script:AiProvInit) { return }
+    $id = [string]$ui.AiProvider.SelectedItem.Tag
+    Set-AiModelList $id
+    Save-AiSettings; Update-AiKeyUi; Update-AiCtxLabel; $ui.AiKeyTestInfo.Text = ''
+    Update-AiOllamaUi
+})
+$ui.AiModelBox.Add_DropDownClosed({ if ($script:AiProvInit) { Save-AiSettings; Update-AiKeyUi; Update-AiOllamaUi } })
+$ui.AiModelBox.Add_LostFocus({ if ($script:AiProvInit) { Save-AiSettings; Update-AiKeyUi } })
+$ui.Assistant_CustomUrl.Add_LostFocus({ if ($script:AiProvInit) { Save-AiSettings; Update-AiKeyUi } })
+$ui.AiBtnOllamaCheck.Add_Click({ Update-AiOllamaUi })
+$ui.AiBtnOllamaSetup.Add_Click({
+    $m = ([string]$ui.AiModelBox.Text).Trim(); if (-not $m) { $m = Get-OllamaSuggestedModel; $ui.AiModelBox.Text = $m }
+    $inst = [bool](Get-OllamaExe)
+    if (-not $inst -and -not (Confirm-Ui ("Ollama (kostenlose KI für diesen PC, Open Source) jetzt installieren und das Modell {0} herunterladen?`n`nDownload: ca. 1 GB Programm + {1} Modell. Danach läuft der Assistent ohne Konto und ohne Kosten - deine Fragen verlassen den PC nicht." -f $m, $(if ($m -match '8b') { 'ca. 5 GB' } elseif ($m -match '20b') { 'ca. 13 GB' } else { 'ca. 2,5 GB' })))) { return }
+    Save-AiSettings
+    $ui.AiBtnOllamaSetup.IsEnabled = $false; $ui.AiOllamaProg.Visibility = 'Visible'
+    $ui.AiOllamaState.Text = $(if ($inst) { ('Starte Ollama und lade {0} - das kann einige Minuten dauern ...' -f $m) } else { ('Installiere Ollama und lade {0} - das kann 5-30 Minuten dauern. PC-Tools bleibt bedienbar.' -f $m) })
+    Invoke-Bg -Script { param($mm) Install-OllamaModel $mm -InstallApp } -Arguments @($m) -Functions @('Install-OllamaModel', 'Get-OllamaExe', 'Get-OllamaState', 'Start-OllamaServer', 'Invoke-AiHttp', 'Invoke-NdCmd', 'ConvertTo-AiJson', 'ConvertTo-AiJsonString') -Done {
+        param($r, $err)
+        $ui.AiOllamaProg.Visibility = 'Collapsed'; $ui.AiBtnOllamaSetup.IsEnabled = $true
+        $lines = @($r | ForEach-Object { [string]$_ } | Where-Object { $_ })
+        $ui.AiKeyTestInfo.Text = $(if ($err) { 'Fehler: ' + $err.Message } else { $lines -join "`n" })
+        Update-AiOllamaUi; Update-AiKeyUi
+    }
+})
 foreach ($aiN in 'Assistant_CtxPage', 'Assistant_CtxSystem', 'Assistant_CtxHealth', 'Assistant_CtxLog', 'Assistant_CtxSelection', 'Assistant_ErrorButton') { if ($ui[$aiN]) { $ui[$aiN].Add_Click({ Save-AiSettings; Update-AiCtxLabel }) } }
-$ui.Assistant_Model.Add_DropDownClosed({ Save-AiSettings; Update-AiKeyUi })
+try { Initialize-AiProvider } catch { }
 $ui.Assistant_KeyScope.Add_DropDownClosed({ Save-AiSettings; $ui.AiKeyTestInfo.Text = 'Gilt beim nächsten Speichern des Schlüssels. "Alle Konten" ist praktisch, wenn PC-Tools auch unter anderen Konten laufen soll - dann kann aber jedes Programm auf diesem PC den Schlüssel entschlüsseln.' })
 foreach ($aiN in 'Assistant_MonthlyLimit', 'Assistant_MaxTokens') { if ($ui[$aiN]) { $ui[$aiN].Add_LostFocus({ param($s, $e) $dg = ([string]$s.Text) -replace '[^\d]', ''; if ([string]$s.Text -ne $dg) { $s.Text = $dg }; Save-AiSettings; Update-AiUsageUi }) } }
 $ui.Tabs.Add_SelectionChanged({
@@ -40874,9 +41150,9 @@ try { Add-AiLogHooks } catch { }
 # Lite-Ansicht: der Assistent bleibt sichtbar
 if ($LiteTabs -notcontains 'TabAssistant') { $LiteTabs += 'TabAssistant' }
 if ($Script:IsLite) { try { $ui.TabAssistant.Visibility = 'Visible' } catch { } }
-Add-SearchEntry 'KI-Assistent (Claude)' 'KI-Assistent' 'ki ai claude chat frage fragen hilfe assistent anthropic chatgpt erklären' '&#xE99A;' { Open-AiAssistant }
+Add-SearchEntry 'KI-Assistent' 'KI-Assistent' 'ki ai claude chat frage fragen hilfe assistent anthropic chatgpt openai ollama groq mistral gemini kostenlos erklären' '&#xE99A;' { Open-AiAssistant }
 Add-SearchEntry 'Protokoll vom KI-Assistenten erklären lassen' 'Protokoll' 'ki claude log protokoll erklären fehler warnung' '&#xE99A;' { Start-AiExplainLog }
-Add-SearchEntry 'Claude API-Schlüssel einrichten' 'KI-Assistent' 'api key schlüssel anthropic claude token verbrauch limit modell' '&#xE8D7;' { Open-AiAssistant; Set-AiSidebar $true }
+Add-SearchEntry 'KI-Anbieter wählen (kostenlos oder bezahlt)' 'KI-Assistent' 'api key schlüssel anbieter anthropic claude openai chatgpt ollama groq openrouter mistral gemini lokal kostenlos gratis token verbrauch limit modell' '&#xE8D7;' { Open-AiAssistant; Set-AiSidebar $true }
 Add-SearchEntry 'In Claude.ai fragen (ohne Schlüssel)' 'KI-Assistent' 'claude.ai browser zwischenablage ohne schlüssel' '&#xE774;' { Open-AiAssistant }
 
 # ---------------------------------------------------------------- Netzwerk-Diagnose (Oberfläche)
