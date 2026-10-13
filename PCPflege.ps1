@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Auto, [switch]$Run, [string]$Parts = '', [switch]$Analyze, [switch]$CheckOnly, [string]$RunId = '', [string]$AppsFile = '', [string]$WingetFile = '', [string]$DirectFile = '', [string]$Monitor = '', [switch]$DeskArrange, [string]$Topology = '', [int]$Delay = 0, [switch]$Silent, [switch]$Install, [string]$JobFile = '', [switch]$Backup, [switch]$FleetPoll, [string]$FirstLogon = '', [switch]$NetDiag, [switch]$TbSync, [switch]$WinRepair, [switch]$NetDeep, [string]$DeepOpts = '', [switch]$FullBackup, [switch]$FullRepair, [switch]$NetDoc, [switch]$Sign, [string]$SignOpts = '', [string]$ChocoFile = '')
 
-$AppVersion = '13.9'
+$AppVersion = '13.9.1'
 $DefaultUpdateSource = 'github:rhedv42-sudo/pc-tools@stable'
 # Portabel (USB-Stick): Datei portable.txt neben dem Skript -> Einstellungen/Protokolle im Ordner Daten auf dem Stick
 $Script:IsPortable = [bool]($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'portable.txt')))
@@ -16634,6 +16634,11 @@ function Get-SilentUninstallCmd($P) {
     if ($P.Msi -and $P.Guid) { return [pscustomobject]@{ Exe = [IO.Path]::Combine($env:SystemRoot, 'System32\msiexec.exe'); Args = ('/x {0} /qn /norestart REBOOT=ReallySuppress' -f $P.Guid); How = 'MSI' } }
     if ($P.Quiet) { try { $sp = Split-CcCommand $P.Quiet; if ([IO.File]::Exists($sp[0])) { return [pscustomobject]@{ Exe = $sp[0]; Args = [string]$sp[1]; How = 'Hersteller (still)' } } } catch { } }
     if (-not $P.Uninstall) { return $null }
+    # von winget installierte portable Programme: "winget uninstall --product-code ..."
+    if ([string]$P.Uninstall -match '^\s*"?winget(\.exe)?"?\s+(uninstall\s.+)$') {
+        $wg = ''; try { $wg = (Get-Command winget.exe -ErrorAction Stop).Source } catch { }
+        if ($wg) { return [pscustomobject]@{ Exe = $wg; Args = ($Matches[2] + ' --silent --force --accept-source-agreements --disable-interactivity'); How = 'winget' } }
+    }
     $sp = $null; try { $sp = Split-CcCommand $P.Uninstall } catch { return $null }
     $exe = [string]$sp[0]; $a = [string]$sp[1]; if (-not [IO.File]::Exists($exe)) { return $null }
     $fn = [IO.Path]::GetFileName($exe).ToLower()
@@ -16642,9 +16647,13 @@ function Get-SilentUninstallCmd($P) {
     $desc = if ($vi) { '{0} {1} {2} {3}' -f $vi.FileDescription, $vi.Comments, $vi.ProductName, $vi.LegalCopyright } else { '' }
     if ($fn -match '^unins\d{3}\.exe$' -or $desc -match '(?i)inno setup') { return [pscustomobject]@{ Exe = $exe; Args = ($a + ' /VERYSILENT /SUPPRESSMSGBOXES /NORESTART').Trim(); How = 'Inno Setup' } }
     if ($fn -eq 'update.exe' -and $a -match '(?i)--uninstall') { return [pscustomobject]@{ Exe = $exe; Args = ($a + ' -s').Trim(); How = 'Squirrel' } }
+    # WiX-Burn-Pakete (Package Cache ... /uninstall)
+    if ($a -match '(?i)(^|\s)/uninstall(\s|$)' -and $exe -match '(?i)\\Package Cache\\') { return [pscustomobject]@{ Exe = $exe; Args = ($a + ' /quiet /norestart').Trim(); How = 'WiX/Burn' } }
     $isNsis = $false
-    try { $fs = [IO.File]::OpenRead($exe); try { $buf = New-Object byte[] ([Math]::Min([int64]524288, $fs.Length)); [void]$fs.Read($buf, 0, $buf.Length) } finally { $fs.Close() }; $isNsis = ([Text.Encoding]::ASCII.GetString($buf) -match 'Nullsoft|NSIS Error|nsis\.sf\.net') } catch { }
-    if ($isNsis) { return [pscustomobject]@{ Exe = $exe; Args = ($a + ' /S').Trim(); How = 'NSIS' } }
+    try { $fs = [IO.File]::OpenRead($exe); try { $buf = New-Object byte[] ([Math]::Min([int64]4194304, $fs.Length)); [void]$fs.Read($buf, 0, $buf.Length) } finally { $fs.Close() }; $isNsis = ([Text.Encoding]::ASCII.GetString($buf) -match 'Nullsoft|NSIS Error|nsis\.sf\.net') } catch { }
+    # electron-builder (NSIS): "Uninstall <Name>.exe"
+    if (-not $isNsis -and $fn -match '^uninstall .+\.exe$') { $isNsis = $true }
+    if ($isNsis) { return [pscustomobject]@{ Exe = $exe; Args = (($a -replace '(?i)(^|\s)/S(\s|$)', ' ') + ' /S').Trim(); How = 'NSIS' } }
     return $null
 }
 function Get-UnusedPrograms([int]$Days = 180) {
@@ -16677,8 +16686,8 @@ function Get-UnusedPrograms([int]$Days = 180) {
         $sil = Get-SilentUninstallCmd $p
         $known = [bool]$exes.Count
         $status = if (-not $known) { 'Nutzung nicht feststellbar' } elseif ($last) { 'zuletzt benutzt vor {0} Tagen' -f [int]((Get-Date) - $last).TotalDays } else { 'seit der Installation nie gestartet' }
-        if (-not $sil) { $status += ' - Deinstallation nur von Hand' }
-        $out.Add([pscustomobject]@{ Sel = [bool]($known -and $sil); Name = $p.Name; Publisher = $p.Publisher; Version = $p.Version; LastUsed = $last; LastText = $(if ($last) { $last.ToString('dd.MM.yyyy') } elseif ($known) { 'nie' } else { '?' }); DateText = $(if ($inst) { $inst.ToString('dd.MM.yyyy') } else { '' }); Size = $p.Size; SizeText = $p.SizeText; Status = $status; Silent = [bool]$sil; Location = $loc; Prog = $p })
+        if (-not $sil) { $status += ' - wird über winget oder das Deinstallationsprogramm des Herstellers entfernt' }
+        $out.Add([pscustomobject]@{ Sel = [bool]$known; Name = $p.Name; Publisher = $p.Publisher; Version = $p.Version; LastUsed = $last; LastText = $(if ($last) { $last.ToString('dd.MM.yyyy') } elseif ($known) { 'nie' } else { '?' }); DateText = $(if ($inst) { $inst.ToString('dd.MM.yyyy') } else { '' }); Size = $p.Size; SizeText = $p.SizeText; Status = $status; Silent = [bool]$sil; Location = $loc; Prog = $p })
     }
     return , @($out | Sort-Object @{ e = { -not $_.Sel } }, @{ e = { $_.Size }; Descending = $true })
 }
@@ -16704,22 +16713,43 @@ function Invoke-UnusedUninstall($Items, [string]$BackupDir) {
     $ok = 0; $fail = 0
     foreach ($it in @($Items)) {
         $p = $it.Prog; $log.Add(''); $log.Add('== ' + $p.Name + ' ==')
-        $c = Get-SilentUninstallCmd $p
-        if (-not $c) { $log.Add('  übersprungen: kein stiller Deinstallationsweg - bitte von Hand deinstallieren.'); $fail++; continue }
-        $t0 = Get-Date; $pr = $null
-        try {
-            $pr = if ($c.Args) { Start-Process -FilePath $c.Exe -ArgumentList $c.Args -PassThru -WindowStyle Hidden -ErrorAction Stop } else { Start-Process -FilePath $c.Exe -PassThru -WindowStyle Hidden -ErrorAction Stop }
-            if (-not $pr.WaitForExit(900000)) { try { $pr.Kill() } catch { }; $log.Add('  abgebrochen: lief länger als 15 Minuten (wartet vermutlich auf eine Eingabe).') }
-            $rx = '^(un_?|unins|uninst|au_|_iu14d2n|_un|setup|msiexec|.*uninstall.*|.*deinst.*)'
-            $sw = [Diagnostics.Stopwatch]::StartNew(); $idle = 0
-            while ($sw.Elapsed.TotalMinutes -lt 10) {
-                if (-not (Test-CcProgramPresent $p)) { break }
-                $busy = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -match $rx -and $(try { $_.StartTime -ge $t0 } catch { $false }) }).Count
-                if ($busy) { $idle = 0 } else { $idle++ }; if ($idle -ge 4) { break }
-                Start-Sleep -Seconds 2
-            }
-        } catch { $log.Add('  Fehler beim Start: ' + $_.Exception.Message); $fail++; continue }
-        if (Test-CcProgramPresent $p) { $log.Add(('  NICHT entfernt ({0}, Rückgabewert {1}) - bitte von Hand deinstallieren.' -f $c.How, $(try { $pr.ExitCode } catch { '?' }))); $fail++; continue }
+        # Wege der Reihe nach: 1. still (Hersteller/MSI/Inno/NSIS/...)  2. winget  3. Deinstallationsprogramm sichtbar  4. portables Programm ohne Deinstaller: Ordner + Eintrag entfernen
+        $steps = [System.Collections.Generic.List[object]]::new()
+        $c0 = Get-SilentUninstallCmd $p; if ($c0) { $steps.Add([pscustomobject]@{ Exe = $c0.Exe; Args = $c0.Args; How = $c0.How; Visible = $false }) }
+        $wg = ''; try { $wg = (Get-Command winget.exe -ErrorAction Stop).Source } catch { }
+        if ($wg -and -not ($c0 -and $c0.How -eq 'winget')) { $steps.Add([pscustomobject]@{ Exe = $wg; Args = ('uninstall --name "{0}" --exact --silent --force --accept-source-agreements --disable-interactivity' -f ([string]$p.Name -replace '"', '')); How = 'winget'; Visible = $false }) }
+        if ($p.Uninstall -and -not ($c0 -and $c0.How -eq 'winget')) { try { $spv = Split-CcCommand $p.Uninstall; if ([IO.File]::Exists([string]$spv[0])) { $steps.Add([pscustomobject]@{ Exe = [string]$spv[0]; Args = [string]$spv[1]; How = 'Deinstallationsprogramm des Herstellers'; Visible = $true }) } } catch { } }
+        $c = $null; $pr = $null
+        foreach ($st in $steps) {
+            if ($st.Visible) { $log.Add('  Stiller Weg nicht möglich - das Deinstallationsprogramm des Herstellers wurde geöffnet, bitte dort bestätigen.') }
+            $t0 = Get-Date; $pr = $null
+            try {
+                $ws = $(if ($st.Visible) { 'Normal' } else { 'Hidden' })
+                $pr = if ($st.Args) { Start-Process -FilePath $st.Exe -ArgumentList $st.Args -PassThru -WindowStyle $ws -ErrorAction Stop } else { Start-Process -FilePath $st.Exe -PassThru -WindowStyle $ws -ErrorAction Stop }
+                if (-not $pr.WaitForExit(900000)) { try { $pr.Kill() } catch { }; $log.Add('  abgebrochen: lief länger als 15 Minuten.') }
+                $rx = '^(un_?|unins|uninst|au_|_iu14d2n|_un|setup|msiexec|winget|.*uninstall.*|.*deinst.*)'
+                $sw = [Diagnostics.Stopwatch]::StartNew(); $idle = 0
+                while ($sw.Elapsed.TotalMinutes -lt $(if ($st.Visible) { 15 } else { 10 })) {
+                    if (-not (Test-CcProgramPresent $p)) { break }
+                    $busy = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -match $rx -and $(try { $_.StartTime -ge $t0 } catch { $false }) }).Count
+                    if ($busy) { $idle = 0 } else { $idle++ }; if ($idle -ge 4) { break }
+                    Start-Sleep -Seconds 2
+                }
+            } catch { $log.Add(('  {0}: Start nicht möglich ({1})' -f $st.How, $_.Exception.Message)); continue }
+            if (-not (Test-CcProgramPresent $p)) { $c = $st; break }
+            $log.Add(('  {0}: nicht entfernt (Rückgabewert {1}) - nächster Weg ...' -f $st.How, $(try { $pr.ExitCode } catch { '?' })))
+        }
+        if (-not $c -and -not $p.Uninstall -and (Test-CcProgramPresent $p)) {
+            # Programm ohne Deinstallationsprogramm (portabel): Ordner in den Papierkorb, Eintrag gesichert entfernen
+            try {
+                $rows = [System.Collections.Generic.List[object]]::new()
+                if ($p.Location -and $p.Location -match '^[A-Za-z]:\\.+\\.+' -and [IO.Directory]::Exists($p.Location)) { $rows.Add([pscustomobject]@{ Kind = 'Dir'; Path = $p.Location.TrimEnd('\'); Hive = ''; Key = $p.Location }) }
+                $rows.Add([pscustomobject]@{ Kind = 'Reg'; Hive = $p.Hive; Path = $p.Path; Key = ('{0}\{1}' -f $p.Hive, $p.Path) })
+                foreach ($m in @(Remove-CcLeftovers $rows.ToArray() $BackupDir | ForEach-Object { $_ })) { $log.Add('  ' + $m) }
+                if (-not (Test-CcProgramPresent $p)) { $c = [pscustomobject]@{ How = 'ohne Deinstallationsprogramm: Ordner und Eintrag entfernt' } }
+            } catch { $log.Add('  Entfernen nicht möglich: ' + $_.Exception.Message) }
+        }
+        if (-not $c) { $log.Add('  NICHT entfernt - alle Wege versucht. Bitte über Einstellungen > Apps deinstallieren.'); $fail++; continue }
         $ok++; $log.Add(('  deinstalliert ({0})' -f $c.How))
         try {
             $rows = @(Find-CcLeftovers $p | ForEach-Object { $_ })
@@ -21658,6 +21688,7 @@ $pageSecurity = New-Page 'Sicherheit' 'Alle Schutzfunktionen dieses PCs auf eine
 
 # ---------------------------------------------------------------- Handbuch (wird mit jeder Version gepflegt)
 $ManualNews = @(
+    'Version 13.9.1: "Nicht genutzte Programme" entfernt jetzt auch Programme ohne stillen Deinstallationsweg: erst still (MSI, Inno, NSIS, electron-builder, WiX, Squirrel), dann über winget, dann über das Deinstallationsprogramm des Herstellers, bei portablen Programmen ohne Deinstaller werden Ordner (Papierkorb) und Eintrag (gesichert) entfernt. Vorbereitung für die Mehrsprachigkeit von Version 14.',
     'Version 13.9: Der KI-Assistent arbeitet jetzt selbstständig: Kostenlose KI mit einem Klick (oder automatisch beim ersten Senden), automatische Diagnose nach jedem Pflegelauf in einfachen Worten, wöchentliche Zusammenfassung "Was ist diese Woche auf deinem PC passiert?", Bluescreens (Minidumps mit Stoppcode) und Ereignisprotokoll erklären, Netzwerk-Bericht per KI zusammenfassen mit Maßnahmenliste nach Wichtigkeit, neue Lese-Werkzeuge (Autostart, Treiber, Updates - immer erst nach Bestätigung), Spracheingabe und Vorlesen, Gespräch je PC speichern und Gedächtnis für frühere Probleme.',
     'Version 13.8: Der KI-Assistent hat jetzt eine Anbieter-Auswahl (Dropdown): komplett kostenlos und ohne Konto mit Ollama (KI läuft lokal auf dem PC, "Ollama einrichten" installiert alles mit einem Klick), kostenlos mit Gratis-Konto über Groq, OpenRouter oder Mistral (EU), bezahlt mit Claude, ChatGPT oder Gemini - oder jede andere OpenAI-kompatible KI. Schlüssel und Modell je Anbieter getrennt. "Nicht genutzte Programme" lässt sich jetzt ab 5 Tagen einstellen. Dazu Stabilität: Dienste-Aktionen, Netzlaufwerke, Update-Prüfung und Statusmeldungen können PC-Tools nicht mehr endlos blockieren.',
     'Version 13.7.1: PC-Tools ist jetzt Open Source (Apache 2.0) - https://github.com/rhedv42-sudo/pc-tools. Updates kommen ab jetzt aus dem öffentlichen Repository (Zweig stable, Downloads unter Releases), ein GitHub-Token ist nicht mehr nötig. Bestehende Installationen werden automatisch umgestellt.',
@@ -38936,7 +38967,7 @@ $script:UnRun = {
         Set-GridItems $ui.UnGrid $rows
         $sel = @($rows | Where-Object { $_.Sel })
         $ui.BtnUnRemove.IsEnabled = [bool]$rows.Count
-        $ui.UnState.Text = if ($rows.Count) { ('{0} Programme gefunden, {1} davon vorausgewählt (still entfernbar, Nutzung sicher erkannt). Häkchen bei Bedarf anpassen, dann "Angehakte jetzt entfernen".' -f $rows.Count, $sel.Count) + $(if ($script:UnDaysLast -lt 30) { ' Achtung: kurzer Zeitraum - darunter können auch Programme sein, die du nur selten brauchst. Liste bitte kurz prüfen.' } else { '' }) } else { 'Keine nicht genutzten Programme gefunden.' }
+        $ui.UnState.Text = if ($rows.Count) { ('{0} Programme gefunden, {1} davon vorausgewählt (Nutzung sicher erkannt). Häkchen bei Bedarf anpassen, dann "Angehakte jetzt entfernen".' -f $rows.Count, $sel.Count) + $(if ($script:UnDaysLast -lt 30) { ' Achtung: kurzer Zeitraum - darunter können auch Programme sein, die du nur selten brauchst. Liste bitte kurz prüfen.' } else { '' }) } else { 'Keine nicht genutzten Programme gefunden.' }
     }
 }
 $ui.BtnUnScan.Add_Click({ & $script:UnRun })
