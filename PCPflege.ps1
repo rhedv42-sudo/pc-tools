@@ -1562,7 +1562,7 @@ function Get-DefaultConfig {
         Cleaner = [ordered]@{ InSchedule = $false; Items = ''; KeepCookies = '' }
         OneClick = [ordered]@{ Updates = $true; Drivers = $true; Programs = $true; Repair = $true; AutoRepair = $false }
         DriverSafety = [ordered]@{ Enabled = $true; Keep = 5 }
-        Assistant = [ordered]@{ Provider = ''; Model = ''; CustomUrl = ''; KeyScope = 'Nur mein Windows-Konto'; MonthlyLimit = 0; MaxTokens = 1024; CtxPage = $true; CtxSystem = $false; CtxHealth = $false; CtxLog = $false; CtxSelection = $true; ErrorButton = $true }
+        Assistant = [ordered]@{ Provider = ''; Model = ''; CustomUrl = ''; AutoDiag = $true; AutoCloud = $false; Weekly = $true; Speak = $false; SaveChat = $true; Memory = $true; KeyScope = 'Nur mein Windows-Konto'; MonthlyLimit = 0; MaxTokens = 1024; CtxPage = $true; CtxSystem = $false; CtxHealth = $false; CtxLog = $false; CtxSelection = $true; ErrorButton = $true }
         Integrate = [ordered]@{ MqttEnabled = $false; MqttHost = ''; MqttPort = 1883; MqttUser = ''; MqttTopic = 'pcpflege'; HaEnabled = $false; HaUrl = ''; RmmEnabled = $false; RmmUrl = '' }
         Notify = [ordered]@{ Enabled = $false; Ntfy = ''; HaWebhook = ''; ChatWebhook = ''; OnRed = $true; OnWarn = $true; OnBackup = $true; OnBluescreen = $true; OnRecover = $true }
         Schedule = [ordered]@{
@@ -19225,6 +19225,19 @@ $AiActionDefs = @(
         Desc = 'Liefert eine Zusammenfassung des letzten PC-Tools-Laufs (Warnungen, Fehler, letzte Zeilen). Nur lesen.'; Params = [ordered]@{}; Required = @() }
     [ordered]@{ Name = 'zustand_lesen'; Kind = 'Read'; Title = 'Zustand und Score lesen'
         Desc = 'Liefert Zustands-Score, Teilwerte und die Punkte der Ampel (z.B. Speicher knapp, Updates alt). Nur lesen.'; Params = [ordered]@{}; Required = @() }
+    [ordered]@{ Name = 'ereignisse_lesen'; Kind = 'Read'; Title = 'Windows-Ereignisprotokoll lesen'
+        Desc = 'Liefert die häufigsten Fehler und kritischen Ereignisse aus dem Windows-Ereignisprotokoll (System und Anwendung), gruppiert mit Anzahl und Meldung. Nur lesen.'
+        Params = [ordered]@{ tage = [ordered]@{ type = 'integer'; description = 'Zeitraum in Tagen (1-60), Standard 7' } }; Required = @() }
+    [ordered]@{ Name = 'abstuerze_lesen'; Kind = 'Read'; Title = 'Bluescreens und Abstürze lesen'
+        Desc = 'Liefert Bluescreens (Minidumps mit Stoppcode), unerwartete Neustarts und Absturz-Ereignisse der letzten 90 Tage. Nur lesen.'; Params = [ordered]@{}; Required = @() }
+    [ordered]@{ Name = 'autostart_lesen'; Kind = 'Read'; Title = 'Autostart lesen'
+        Desc = 'Liefert alle Programme und Aufgaben, die mit Windows starten (aktiv/aus, Einstufung). Nur lesen.'; Params = [ordered]@{}; Required = @() }
+    [ordered]@{ Name = 'treiber_lesen'; Kind = 'Read'; Title = 'Treiber und Geräte lesen'
+        Desc = 'Liefert Geräte mit Problemen aus dem Geräte-Manager und die ältesten Treiber von Drittherstellern. Nur lesen.'; Params = [ordered]@{}; Required = @() }
+    [ordered]@{ Name = 'updates_lesen'; Kind = 'Read'; Title = 'Windows-Updates lesen'
+        Desc = 'Liefert den Update-Verlauf (erfolgreich/fehlgeschlagen), ausstehende Updates und ob ein Neustart aussteht. Nur lesen; die Suche kann 1-2 Minuten dauern.'; Params = [ordered]@{}; Required = @() }
+    [ordered]@{ Name = 'netzwerkbericht_lesen'; Kind = 'Read'; Title = 'Netzwerk-Bericht lesen'
+        Desc = 'Liefert das Ergebnis der letzten Netzwerk-Dokumentation dieser Sitzung (Geräte, Bewertung, Befunde mit Maßnahmen, Erreichbarkeit von außen). Nur lesen.'; Params = [ordered]@{}; Required = @() }
 )
 
 # ---------------------------------------------------------------- JSON (eigener, verlässlicher Serialisierer für PS 5.1 und 7)
@@ -19427,6 +19440,7 @@ function Invoke-AiMessages([string]$Key, [byte[]]$Body, [string]$Url, [string]$V
     $res = $null
     for ($try = 1; $try -le 2; $try++) {
         $res = Invoke-AiHttp 'POST' $Url $h $Body $TimeoutSec -NoProxy:$local
+        if ($local -and [int]$res.Status -eq 0 -and $try -lt 2 -and $Url -match ':11434/') { if (Start-OllamaServer) { continue } }
         if ($res.Status -in 500, 502, 503, 529 -and $try -lt 2) { Start-Sleep -Seconds 4; continue }
         break
     }
@@ -19483,6 +19497,143 @@ function Get-OllamaSuggestedModel {
     $gb = 8; try { $gb = [math]::Round((Get-CimInstance Win32_ComputerSystem -OperationTimeoutSec 3 -ErrorAction Stop).TotalPhysicalMemory / 1GB) } catch { }
     if ($gb -ge 24) { return 'qwen3:8b' }
     return 'qwen3:4b'
+}
+
+# ---------------------------------------------------------------- KI 13.9: Daten für die Lese-Werkzeuge (alles nur lesen)
+$AiBugChecks = @{
+    0x0A = 'IRQL_NOT_LESS_OR_EQUAL (meist fehlerhafter Treiber)'; 0x1A = 'MEMORY_MANAGEMENT (Arbeitsspeicher oder Treiber)'; 0x1E = 'KMODE_EXCEPTION_NOT_HANDLED (Treiber)'
+    0x3B = 'SYSTEM_SERVICE_EXCEPTION (Treiber oder Systemdatei)'; 0x50 = 'PAGE_FAULT_IN_NONPAGED_AREA (Treiber, RAM oder Virenschutz)'; 0x7E = 'SYSTEM_THREAD_EXCEPTION_NOT_HANDLED (Treiber)'
+    0x7F = 'UNEXPECTED_KERNEL_MODE_TRAP (Hardware/Übertaktung)'; 0x9F = 'DRIVER_POWER_STATE_FAILURE (Treiber beim Energiesparen/Standby)'
+    0xC2 = 'BAD_POOL_CALLER (Treiber)'; 0xC5 = 'DRIVER_CORRUPTED_EXPOOL (Treiber)'; 0xD1 = 'DRIVER_IRQL_NOT_LESS_OR_EQUAL (Treiber, oft Netzwerk/WLAN)'
+    0xEF = 'CRITICAL_PROCESS_DIED (Systemprozess beendet - Systemdateien/Datenträger)'; 0xF4 = 'CRITICAL_OBJECT_TERMINATION (Datenträger/Systemprozess)'; 0x101 = 'CLOCK_WATCHDOG_TIMEOUT (Prozessor/BIOS/Übertaktung)'
+    0x116 = 'VIDEO_TDR_FAILURE (Grafiktreiber)'; 0x117 = 'VIDEO_TDR_TIMEOUT_DETECTED (Grafiktreiber)'; 0x124 = 'WHEA_UNCORRECTABLE_ERROR (Hardwarefehler: CPU, RAM, Überhitzung, Netzteil)'
+    0x133 = 'DPC_WATCHDOG_VIOLATION (Treiber, oft Speicher-Controller/SSD)'; 0x139 = 'KERNEL_SECURITY_CHECK_FAILURE (Treiber oder beschädigte Daten)'; 0x13A = 'KERNEL_MODE_HEAP_CORRUPTION (Treiber)'
+    0x154 = 'UNEXPECTED_STORE_EXCEPTION (Datenträger/SSD)'; 0x1E0 = 'BUGCODE_ID_DRIVER'; 0x7A = 'KERNEL_DATA_INPAGE_ERROR (Datenträger/SSD oder Kabel)'
+    0x77 = 'KERNEL_STACK_INPAGE_ERROR (Datenträger)'; 0xBE = 'ATTEMPTED_WRITE_TO_READONLY_MEMORY (Treiber)'; 0xFC = 'ATTEMPTED_EXECUTE_OF_NOEXECUTE_MEMORY (Treiber)'
+    0x18B = 'SECURE_KERNEL_ERROR'; 0x1CA = 'SYNTHETIC_WATCHDOG_TIMEOUT'; 0x9C = 'MACHINE_CHECK_EXCEPTION (Hardware)'
+}
+function Get-AiBugCheckName([long]$Code) { if ($Code -eq 0xC000021AL) { return 'Windows-Anmeldeprozess abgestürzt (Systemdateien)' }; $n = $null; if ($Code -ge 0 -and $Code -le [int]::MaxValue) { $n = $AiBugChecks[[int]$Code] }; if ($n) { return $n }; return 'unbekannter Stoppcode' }
+# Liest Stoppcode und Parameter aus dem Kopf einer Minidump-Datei (PAGEDU64 / PAGEDUMP)
+function Read-MinidumpBugCheck([string]$Path) {
+    try {
+        $fs = [IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
+        try { $buf = New-Object byte[] 0x60; $n = $fs.Read($buf, 0, $buf.Length) } finally { $fs.Close() }
+        if ($n -lt 0x60) { return $null }
+        $sig = [Text.Encoding]::ASCII.GetString($buf, 0, 8)
+        if ($sig -eq 'PAGEDU64') { $code = [BitConverter]::ToUInt32($buf, 0x38); $p = @(0x40, 0x48, 0x50, 0x58 | ForEach-Object { '0x{0:X}' -f [BitConverter]::ToUInt64($buf, $_) }) }
+        elseif ($sig -eq 'PAGEDUMP') { $code = [BitConverter]::ToUInt32($buf, 0x20); $p = @(0x24, 0x28, 0x2C, 0x30 | ForEach-Object { '0x{0:X}' -f [BitConverter]::ToUInt32($buf, $_) }) }
+        else { return $null }
+        return [pscustomobject]@{ Code = [long]$code; Params = $p }
+    } catch { return $null }
+}
+function Get-AiCrashText([int]$Days = 90) {
+    $o = [System.Collections.Generic.List[string]]::new()
+    $since = (Get-Date).AddDays(-$Days)
+    $dumps = @()
+    foreach ($d in @((Join-Path $env:SystemRoot 'Minidump'), (Join-Path $env:SystemRoot 'LiveKernelReports'))) {
+        try { $dumps += @(Get-ChildItem -LiteralPath $d -Filter '*.dmp' -File -Recurse -ErrorAction Stop | Where-Object { $_.LastWriteTime -gt $since }) } catch { }
+    }
+    $o.Add(('Bluescreens/Absturzabbilder der letzten {0} Tage: {1}' -f $Days, $dumps.Count))
+    foreach ($f in @($dumps | Sort-Object LastWriteTime -Descending | Select-Object -First 10)) {
+        $bc = Read-MinidumpBugCheck $f.FullName
+        $o.Add(('- {0:dd.MM.yyyy HH:mm}  {1}{2}' -f $f.LastWriteTime, $f.Name, $(if ($bc) { '  Stoppcode 0x{0:X} = {1}, Parameter {2}' -f $bc.Code, (Get-AiBugCheckName $bc.Code), ($bc.Params -join ' ') } else { '' })))
+    }
+    try { if (Test-Path -LiteralPath (Join-Path $env:SystemRoot 'MEMORY.DMP')) { $m = Get-Item -LiteralPath (Join-Path $env:SystemRoot 'MEMORY.DMP'); $o.Add(('Vollständiges Speicherabbild MEMORY.DMP vom {0:dd.MM.yyyy} ({1:N1} GB)' -f $m.LastWriteTime, ($m.Length / 1GB))) } } catch { }
+    $ev = @()
+    try { $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = 41, 1001, 6008; StartTime = $since } -MaxEvents 60 -ErrorAction Stop) } catch { }
+    $bug = @($ev | Where-Object { $_.Id -eq 1001 -and $_.ProviderName -match 'WER-SystemErrorReporting|BugCheck' })
+    $kp = @($ev | Where-Object { $_.Id -eq 41 }); $us = @($ev | Where-Object { $_.Id -eq 6008 })
+    $o.Add(('Ereignisse: {0} Bluescreen-Meldungen (1001), {1} unerwartete Neustarts/Stromverlust (Kernel-Power 41), {2} unerwartete Herunterfahren (6008)' -f $bug.Count, $kp.Count, $us.Count))
+    foreach ($e in @($bug | Select-Object -First 6)) { $o.Add(('- {0:dd.MM.yyyy HH:mm} {1}' -f $e.TimeCreated, (([string]$e.Message) -replace '\s+', ' ').Substring(0, [math]::Min(260, ([string]$e.Message -replace '\s+', ' ').Length)))) }
+    foreach ($e in @($kp | Select-Object -First 6)) {
+        $code = 0; try { $code = [long]$e.Properties[0].Value } catch { }
+        $o.Add(('- {0:dd.MM.yyyy HH:mm} Kernel-Power 41{1}' -f $e.TimeCreated, $(if ($code) { ' mit Stoppcode 0x{0:X} = {1}' -f $code, (Get-AiBugCheckName $code) } else { ' ohne Stoppcode (Strom weg, Ausschalter gedrückt, Netzteil oder Überhitzung)' })))
+    }
+    if (-not $dumps.Count -and -not $ev.Count) { $o.Add('Keine Bluescreens und keine unerwarteten Neustarts gefunden.') }
+    return ($o -join "`n")
+}
+function Get-AiEventText([int]$Days = 7, [int]$Top = 25) {
+    $since = (Get-Date).AddDays(-$Days)
+    $all = [System.Collections.Generic.List[object]]::new()
+    foreach ($log in 'System', 'Application') {
+        try { foreach ($e in @(Get-WinEvent -FilterHashtable @{ LogName = $log; Level = 1, 2; StartTime = $since } -MaxEvents 500 -ErrorAction Stop)) { $all.Add($e) } } catch { }
+    }
+    if (-not $all.Count) { return ('Keine Fehler oder kritischen Ereignisse in den letzten {0} Tagen (System und Anwendung).' -f $Days) }
+    $o = [System.Collections.Generic.List[string]]::new()
+    $o.Add(('{0} Fehler/kritische Ereignisse in den letzten {1} Tagen, gruppiert (Anzahl, Quelle, ID, zuletzt, Meldung):' -f $all.Count, $Days))
+    foreach ($g in @($all | Group-Object { '{0}|{1}' -f $_.ProviderName, $_.Id } | Sort-Object Count -Descending | Select-Object -First $Top)) {
+        $e = @($g.Group | Sort-Object TimeCreated -Descending)[0]
+        $msg = ''; try { $msg = ([string]$e.Message -replace '\s+', ' ').Trim() } catch { }
+        if ($msg.Length -gt 220) { $msg = $msg.Substring(0, 220) + ' ...' }
+        $o.Add(('- {0}x  {1} (ID {2}, {3})  zuletzt {4:dd.MM. HH:mm}: {5}' -f $g.Count, $e.ProviderName, $e.Id, $e.LogName, $e.TimeCreated, $msg))
+    }
+    return ($o -join "`n")
+}
+function Get-AiUpdateText {
+    $o = [System.Collections.Generic.List[string]]::new()
+    try {
+        $h = @(Get-WuHistory | ForEach-Object { $_ } | Select-Object -First 25)
+        $o.Add('Zuletzt installierte bzw. versuchte Windows-Updates:')
+        foreach ($x in $h) { $o.Add(('- {0}  {1}  {2}' -f $x.Date, $x.Result, $x.Title)) }
+    } catch { $o.Add('Update-Verlauf nicht lesbar: ' + $_.Exception.Message) }
+    try {
+        $p = @(Get-WuUpdatesList | ForEach-Object { $_ } | Where-Object { $_ -and -not $_.Hidden })
+        $o.Add(''); $o.Add(('Ausstehende Windows-Updates: {0}' -f $p.Count)); foreach ($x in @($p | Select-Object -First 15)) { $o.Add('- ' + $x.Title) }
+    } catch { }
+    try { $rb = (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') -or (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'); $o.Add(('Neustart ausstehend: {0}' -f $(if ($rb) { 'ja' } else { 'nein' }))) } catch { }
+    return ($o -join "`n")
+}
+function Get-AiDriverText {
+    $o = [System.Collections.Generic.List[string]]::new()
+    try { $o.Add((Get-DevIssueText)) } catch { $o.Add('Geräte-Manager nicht lesbar: ' + $_.Exception.Message) }
+    try {
+        $old = @(Get-CimInstance Win32_PnPSignedDriver -OperationTimeoutSec 20 -ErrorAction Stop | Where-Object { $_.DriverDate -and $_.DeviceName -and $_.DriverProviderName -notmatch '^Microsoft' } | Sort-Object DriverDate | Select-Object -First 15)
+        $o.Add(''); $o.Add('Älteste Treiber von Drittherstellern (Gerät, Hersteller, Version, Datum):')
+        foreach ($d in $old) { $o.Add(('- {0} | {1} | {2} | {3:dd.MM.yyyy}' -f $d.DeviceName, $d.DriverProviderName, $d.DriverVersion, $d.DriverDate)) }
+    } catch { }
+    return ($o -join "`n")
+}
+# Wochen-Daten (Hintergrund): Läufe, Ereignisse, Abstürze, Updates
+function Get-AiWeekData([string]$LogDir) {
+    $o = [System.Collections.Generic.List[string]]::new()
+    $since = (Get-Date).AddDays(-7)
+    try {
+        $logs = @(Get-ChildItem -LiteralPath $LogDir -Filter 'PCPflege_*.log' -File -ErrorAction Stop | Where-Object { $_.LastWriteTime -gt $since })
+        $w = 0; $e = 0; foreach ($l in $logs) { foreach ($z in [IO.File]::ReadAllLines($l.FullName)) { if ($z -match '\bWARN') { $w++ } elseif ($z -match '\bFEHLER|\bERROR') { $e++ } } }
+        $o.Add(('PC-Tools-Läufe diese Woche: {0} (Warnungen {1}, Fehler {2})' -f $logs.Count, $w, $e))
+    } catch { $o.Add('PC-Tools-Läufe diese Woche: keine') }
+    try { $up = (Get-Date) - (Get-CimInstance Win32_OperatingSystem -OperationTimeoutSec 5).LastBootUpTime; $o.Add(('Letzter Neustart vor {0:N1} Tagen' -f $up.TotalDays)) } catch { }
+    try { $dv = New-Object IO.DriveInfo $env:SystemDrive; $o.Add(('Laufwerk C: {0:N1} GB frei von {1:N0} GB' -f ($dv.AvailableFreeSpace / 1GB), ($dv.TotalSize / 1GB))) } catch { }
+    $o.Add(''); $o.Add((Get-AiCrashText 7))
+    $o.Add(''); $o.Add((Get-AiEventText 7 15))
+    try {
+        $h = @(Get-WuHistory | ForEach-Object { $_ } | Where-Object { try { [datetime]::ParseExact([string]$_.Date, 'dd.MM.yyyy HH:mm', $null) -gt $since } catch { $false } })
+        $o.Add(''); $o.Add(('Windows-Updates diese Woche: {0}' -f $h.Count)); foreach ($x in @($h | Select-Object -First 12)) { $o.Add(('- {0} {1}' -f $x.Result, $x.Title)) }
+    } catch { }
+    return ($o -join "`n")
+}
+# Gedächtnis je PC (kurze Notizen zu früheren Problemen)
+function Get-AiMemoryFile([string]$Dir) { $pc = ($env:COMPUTERNAME -replace '[^\w\-]', '_'); Join-Path (Join-Path $Dir 'Assistant') ('gedaechtnis-{0}.txt' -f $pc) }
+function Get-AiChatFile([string]$Dir) { $pc = ($env:COMPUTERNAME -replace '[^\w\-]', '_'); Join-Path (Join-Path $Dir 'Assistant') ('gespraech-{0}.json' -f $pc) }
+function Add-AiMemory([string]$Dir, [string]$Text) {
+    $f = Get-AiMemoryFile $Dir; $d = Split-Path -Parent $f; if (-not (Test-Path -LiteralPath $d)) { New-Item $d -ItemType Directory -Force | Out-Null }
+    $lines = @(); if (Test-Path -LiteralPath $f) { $lines = @([IO.File]::ReadAllLines($f, [Text.Encoding]::UTF8) | Where-Object { $_.Trim() }) }
+    foreach ($l in @(([string]$Text -split "`r?`n") | ForEach-Object { $_.Trim().TrimStart('-', '*', ' ') } | Where-Object { $_ -and $_.Length -gt 5 } | Select-Object -First 4)) { $lines += ('{0:dd.MM.yyyy}: {1}' -f (Get-Date), $l) }
+    $lines = @($lines | Select-Object -Last 30)
+    [IO.File]::WriteAllLines($f, [string[]]$lines, (New-Object Text.UTF8Encoding $false))
+}
+function Get-AiMemoryText([string]$Dir) {
+    $f = Get-AiMemoryFile $Dir
+    if (-not (Test-Path -LiteralPath $f)) { return '' }
+    try { return (([IO.File]::ReadAllLines($f, [Text.Encoding]::UTF8) | Where-Object { $_.Trim() }) -join "`n") } catch { return '' }
+}
+# Text fürs Vorlesen (Markdown entfernen)
+function ConvertTo-AiSpeechText([string]$Text) {
+    $t = [string]$Text
+    $t = [regex]::Replace($t, '```[\s\S]*?```', ' (Befehl, siehe Bildschirm) ')
+    $t = [regex]::Replace($t, '\[([^\]]+)\]\([^)]+\)', '$1')
+    $t = $t -replace '[`*_#>|]', '' -replace '(?m)^\s*[-+]\s+', '' -replace '(?m)^\s*(\d+)\.\s+', '$1: '
+    return ($t -replace '\s+', ' ').Trim()
 }
 
 # ---------------------------------------------------------------- Verlauf kürzen (Werkzeug-Paare bleiben gültig)
@@ -24025,6 +24176,14 @@ $aiSideXaml = (New-Card 'Verbindung zur KI' @(
         (New-CheckRow 'Assistant_CtxLog' 'Letzter PC-Tools-Lauf' 'Zusammenfassung des letzten Protokolls: Anzahl OK/Warnungen/Fehler, Warnzeilen, letzte Zeilen.'),
         (New-CheckRow 'Assistant_CtxSelection' 'Anhänge erlauben' 'Markierte Protokollausschnitte und Fehlermeldungen, die du über "Protokoll erklären" oder "Assistent fragen" anhängst.'),
         (New-CheckRow 'Assistant_ErrorButton' 'Bei Fehlermeldungen "Assistent fragen" anbieten' 'Fehlerfenster von PC-Tools bekommen einen zusätzlichen Knopf.'),
+        '<TextBlock Text="Automatik" FontWeight="SemiBold" Foreground="#1F2A44" Margin="0,12,0,4"/>',
+        (New-CheckRow 'Assistant_AutoDiag' 'Nach jedem Pflegelauf automatisch erklären' 'Die KI fasst das Ergebnis jedes Laufs in einfachen Worten zusammen und sagt, was zu tun ist.'),
+        (New-CheckRow 'Assistant_Weekly' 'Wöchentliche Zusammenfassung' 'Einmal pro Woche: "Was ist diese Woche auf deinem PC passiert?" (Läufe, Abstürze, Ereignisprotokoll, Updates).'),
+        (New-CheckRow 'Assistant_AutoCloud' 'Automatik auch mit Online-KI' 'Ohne Haken laufen Diagnose und Wochenbericht nur mit der lokalen KI (Ollama). Mit Haken gehen die Daten dafür auch ohne Nachfrage an den gewählten Online-Anbieter.'),
+        (New-CheckRow 'Assistant_SaveChat' 'Gespräch auf diesem PC speichern' 'Das Gespräch bleibt nach dem Schließen erhalten und wird beim nächsten Öffnen fortgesetzt.'),
+        (New-CheckRow 'Assistant_Memory' 'Frühere Probleme merken' 'Bei "Neues Gespräch" merkt sich der Assistent in 1-3 Zeilen, worum es ging, und berücksichtigt das bei späteren Fragen (Datei gedaechtnis-PC.txt im Datenordner).'),
+        (New-CheckRow 'Assistant_Speak' 'Antworten automatisch vorlesen' 'Liest jede Antwort mit der Windows-Sprachausgabe vor. Vorlesen geht auch einzeln über den Knopf unter jeder Antwort.'),
+        '<WrapPanel Margin="0,6,0,0"><Button x:Name="AiBtnMemShow" Content="Gedächtnis ansehen" Style="{StaticResource Sec}" Padding="12,6" Margin="0,0,6,6"/><Button x:Name="AiBtnMemClear" Content="Gedächtnis löschen" Style="{StaticResource Sec}" Padding="12,6" Margin="0,0,6,6"/></WrapPanel>',
         '<WrapPanel Margin="0,8,0,0"><Button x:Name="AiBtnPreview" Content="Vorschau: was würde gesendet?" Style="{StaticResource Sec}" Padding="12,6"/></WrapPanel>'
     ))
 $pageAssistant = @"
@@ -24072,6 +24231,13 @@ $pageAssistant = @"
                 <TextBlock Text="VORSCHLÄGE" Foreground="#6B7890" FontSize="10.5" FontWeight="Bold" Margin="0,16,0,8"/>
                 <WrapPanel x:Name="AiChips"/>
                 <TextBlock x:Name="AiWelcomeHint" Text="" Foreground="#6B7890" FontSize="12" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                <Border x:Name="AiSetupPanel" Visibility="Collapsed" Background="#E8F5EC" BorderBrush="#16A34A" BorderThickness="1" CornerRadius="10" Padding="14,10" Margin="0,12,0,0">
+                  <StackPanel>
+                    <TextBlock Text="Kostenlose KI mit einem Klick" FontWeight="SemiBold" FontSize="14" Foreground="#1F2A44"/>
+                    <TextBlock Text="Ohne Konto, ohne Kosten, deine Fragen bleiben auf diesem PC. PC-Tools richtet alles automatisch ein (einmalig ca. 3,5 GB Download)." TextWrapping="Wrap" Foreground="#1F2A44" FontSize="12.5" Margin="0,4,0,8"/>
+                    <WrapPanel><Button x:Name="AiBtnQuickSetup" Content="Kostenlose KI jetzt einrichten" Padding="14,7" Margin="0,0,8,0"/><TextBlock Text="oder rechts einen anderen Anbieter wählen" VerticalAlignment="Center" Foreground="#6B7890" FontSize="12"/></WrapPanel>
+                  </StackPanel>
+                </Border>
               </StackPanel>
             </Border>
           </StackPanel>
@@ -24088,7 +24254,8 @@ $pageAssistant = @"
               <TextBlock x:Name="AiInputHint" Text="Frage eingeben ...  (Enter sendet, Umschalt+Enter = neue Zeile)" Foreground="#9AA5B8" FontSize="14" Margin="13,9,0,0" IsHitTestVisible="False" VerticalAlignment="Top"/>
             </Grid>
             <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Bottom">
-              <Button x:Name="AiBtnSend" Padding="16,9" Margin="0,0,0,6" ToolTip="Direkt an Claude senden (API-Schlüssel nötig)"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE724;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center" Margin="0,0,8,0"/><TextBlock Text="Senden"/></StackPanel></Button>
+              <Button x:Name="AiBtnMic" Style="{StaticResource Sec}" Padding="12,6" Margin="0,0,0,6" ToolTip="Spracheingabe: Frage einsprechen (Windows-Spracheingabe, auch mit Windows-Taste + H)"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE720;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBlock Text="Sprechen" FontSize="12"/></StackPanel></Button>
+              <Button x:Name="AiBtnSend" Padding="16,9" Margin="0,0,0,6" ToolTip="An die gewählte KI senden"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE724;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center" Margin="0,0,8,0"/><TextBlock Text="Senden"/></StackPanel></Button>
               <Button x:Name="AiBtnClaudeAi" Style="{StaticResource Sec}" Padding="12,6" Margin="0" ToolTip="Ohne Schlüssel: Frage und PC-Infos in die Zwischenablage kopieren und claude.ai öffnen"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE774;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBlock Text="In Claude.ai fragen" FontSize="12"/></StackPanel></Button>
             </StackPanel>
           </Grid>
@@ -24161,7 +24328,7 @@ $pageNetDoc = New-Page 'Netzwerk dokumentieren' 'Erstellt eine vollständige Dok
         '<TextBlock Text="Links Benutzername bzw. Adresse, rechts Kennwort bzw. Token. Das FRITZ!Box-Kennwort wird nie gespeichert. Ohne Angaben werden diese Teile übersprungen." Foreground="#6B7890" FontSize="11.5" TextWrapping="Wrap" Margin="0,6,0,0"/>' +
         '<WrapPanel Margin="0,6,0,0"><CheckBox x:Name="NdocHaSave" Content="Home-Assistant-Token verschlüsselt merken (nur dieser Windows-Benutzer)" Margin="0,0,16,0"/><CheckBox x:Name="NdocExt" Content="Erreichbarkeit von außen prüfen (öffentliche IP bei Shodan InternetDB nachschlagen)" IsChecked="True"/></WrapPanel></StackPanel></Border>',
         '<WrapPanel><CheckBox x:Name="NdocPorts" Content="Dienste aller Geräte prüfen (59 Ports, dauert 1-3 Minuten)" IsChecked="True" Margin="0,4,16,8"/><CheckBox x:Name="NdocWeb" Content="Weboberflächen auslesen (Titel, Server)" IsChecked="True" Margin="0,4,16,8"/><CheckBox x:Name="NdocSmart" Content="Smart Home und KNX auswerten (KNXnet/IP, Bonjour, UPnP, Shelly, Tasmota, Hue, Node-RED, MQTT, Homematic)" IsChecked="True" Margin="0,4,0,8"/></WrapPanel>',
-        (New-Bar @('BtnNdocScan|Netzwerk jetzt erfassen|P', 'BtnNdocPdf|PDF-Bericht erstellen', 'BtnNdocKnxMon|KNX-Busmonitor (60 s)', 'BtnNdocFolder|Berichte-Ordner')),
+        (New-Bar @('BtnNdocScan|Netzwerk jetzt erfassen|P', 'BtnNdocPdf|PDF-Bericht erstellen', 'BtnNdocAi|KI-Zusammenfassung', 'BtnNdocKnxMon|KNX-Busmonitor (60 s)', 'BtnNdocFolder|Berichte-Ordner')),
         (New-NtProgress 'NdocProg' 'NdocState'),
         '<WrapPanel Margin="0,6,0,0"><CheckBox x:Name="NdocAuto" Content="Jeden Montag automatisch erfassen (PDF im Ordner Netzdoku) und bei neuen Geräten, Diensten oder Schwachstellen melden" Margin="0,0,12,0"/><TextBlock x:Name="NdocAutoState" Text="" Foreground="#6B7890" FontSize="12" VerticalAlignment="Center"/></WrapPanel>',
         (New-Hint 'Die Meldung kommt über die unter Einstellungen > Benachrichtigungen eingerichteten Wege (ntfy, Home Assistant, Teams/Slack). FRITZ!Box und Home Assistant werden bei der automatischen Erfassung nicht abgefragt, weil dafür keine Zugangsdaten gespeichert werden.'))) +
@@ -25479,7 +25646,7 @@ function Get-BgFnClosure([string[]]$Roots) {
 }
 # V14: Grundeinstellungen, die viele Funktionen voraussetzen, auch im Hintergrund-Thread bereitstellen
 function Set-BgCommonVars($Ps) {
-    foreach ($n in 'DataDir', 'ConfigFile', 'ConfigVersion', 'DefaultUpdateSource', 'AppVersion', 'CcRegBackupRoot', 'NtOui', 'NdocPorts', 'NdocPortNames', 'NdocExtRisk', 'NdocEnterprise', 'NdocInfraRules', 'UnusedProtect', 'NtTlsCode') {
+    foreach ($n in 'DataDir', 'ConfigFile', 'ConfigVersion', 'DefaultUpdateSource', 'AppVersion', 'CcRegBackupRoot', 'NtOui', 'NdocPorts', 'NdocPortNames', 'NdocExtRisk', 'NdocEnterprise', 'NdocInfraRules', 'UnusedProtect', 'NtTlsCode', 'AiBugChecks', 'AiProviders', 'AutoSources') {
         try { $v = Get-Variable -Name $n -Scope Script -ErrorAction Stop; $Ps.Runspace.SessionStateProxy.SetVariable($n, $v.Value) } catch { }
     }
 }
@@ -29545,6 +29712,7 @@ $timer.Add_Tick({
         $ui.Progress.Value = 100
         Remove-Item $script:Job.Cancel -Force -ErrorAction SilentlyContinue
         $wasInstall = @($script:Job.Parts) -contains 'NiniteInstall'
+        $jobParts = @($script:Job.Parts); $jobMode = $(try { [string]$script:Job.Mode } catch { '' })
         $script:Job = $null
         Set-Busy $false
         Update-Overview
@@ -29559,6 +29727,7 @@ $timer.Add_Tick({
             foreach ($a in $script:NinApps) { $a.Check.IsChecked = $false }
             Start-NiniteAudit
         }
+        try { if (Get-Command Start-AiAutoDiag -ErrorAction SilentlyContinue) { Start-AiAutoDiag $jobParts } } catch { }
     }
 })
 
@@ -40228,7 +40397,7 @@ $script:AiBusy = $false; $script:AiPending = $null; $script:AiRounds = 0; $scrip
 $script:AiLastTab = $ui.TabOverview; $script:AiLastPage = 'Übersicht'
 $script:AiTypingEl = $null; $script:AiTypingDots = $null; $script:AiTypingN = 0
 $script:AiKeyTesting = $false; $script:AiTestModel = ''; $script:AiTestName = ''; $script:AiOllamaModels = @(); $script:AiTestFromBox = $false; $script:AiErrAsk = $false; $script:AiOpened = $false
-$AiStarters = @('Warum ist mein PC langsam?', 'Erkläre das letzte Protokoll', 'Ist mein PC sicher?', 'Was sollte ich heute am PC erledigen?', 'Mein WLAN bricht ständig ab - was kann ich tun?', 'Welche Funktionen von PC-Tools sollte ich regelmäßig nutzen?')
+$AiStarters = @('Was ist diese Woche auf meinem PC passiert?', 'Warum stürzt mein PC ab? (Bluescreens erklären)', 'Welche Fehler stehen im Ereignisprotokoll?', 'Warum ist mein PC langsam?', 'Erkläre das letzte Protokoll', 'Ist mein PC sicher?', 'Was sollte ich heute am PC erledigen?', 'Mein WLAN bricht ständig ab - was kann ich tun?', 'Welche Funktionen von PC-Tools sollte ich regelmäßig nutzen?')
 $script:AiTypingTimer = New-Object System.Windows.Threading.DispatcherTimer
 $script:AiTypingTimer.Interval = [TimeSpan]::FromMilliseconds(380)
 $script:AiTypingTimer.Add_Tick({
@@ -40274,6 +40443,7 @@ function Save-AiSettings {
         $c.Assistant.KeyScope = [string]$ui.Assistant_KeyScope.SelectedItem.Content
         $c.Assistant.CtxPage = $s.Page; $c.Assistant.CtxSystem = $s.System; $c.Assistant.CtxHealth = $s.Health; $c.Assistant.CtxLog = $s.Log
         $c.Assistant.CtxSelection = $s.Attach; $c.Assistant.ErrorButton = $s.ErrorButton
+        foreach ($nm in 'AutoDiag', 'AutoCloud', 'Weekly', 'Speak', 'SaveChat', 'Memory') { $c.Assistant | Add-Member -NotePropertyName $nm -NotePropertyValue ([bool]$ui[('Assistant_' + $nm)].IsChecked) -Force }
         Save-PflegeConfig $c
     } catch { }
 }
@@ -40435,6 +40605,7 @@ function Add-AiAssistantBubble([string]$Text, [string]$Note = '') {
     if ($Note) { $n = New-AiTb 12 '#B45309'; $n.Text = $Note; $n.Margin = '0,8,0,0'; [void]$sp.Children.Add($n) }
     $ft = New-Object Windows.Controls.WrapPanel; $ft.Margin = '0,10,0,0'; $ft.Opacity = 0.85
     $cb = New-AiMiniButton 'Kopieren' 'E8C8' $Text; $cb.Add_Click({ param($s, $e) Copy-AiText ([string]$s.Tag) }); [void]$ft.Children.Add($cb)
+    $vb = New-AiMiniButton 'Vorlesen' 'E767' $Text; $vb.Add_Click({ param($s, $e) Invoke-AiSpeak ([string]$s.Tag) }); [void]$ft.Children.Add($vb)
     $tm = New-AiTb 11 '#9AA5B8'; $tm.Text = (Get-Date).ToString('HH:mm'); $tm.VerticalAlignment = 'Center'; [void]$ft.Children.Add($tm)
     [void]$sp.Children.Add($ft)
     $bd.Child = $sp; [void]$g.Children.Add($bd)
@@ -40519,7 +40690,7 @@ function Add-AiToolCard($Use) {
     $sp = New-Object Windows.Controls.StackPanel
     $hd = New-Object Windows.Controls.StackPanel; $hd.Orientation = 'Horizontal'
     $gl = New-AiTb 13 '#EA580C'; $gl.FontFamily = 'Segoe MDL2 Assets'; $gl.Text = $(switch ($def.Kind) { 'Read' { [string][char]0xE8A1 } 'Open' { [string][char]0xE8A7 } default { [string][char]0xE945 } }); $gl.Margin = '0,1,8,0'; [void]$hd.Children.Add($gl)
-    $ht = New-AiTb 11 '#6B7890'; $ht.Text = 'CLAUDE SCHLÄGT EINE AKTION VOR'; $ht.FontWeight = 'Bold'; [void]$hd.Children.Add($ht)
+    $ht = New-AiTb 11 '#6B7890'; $ht.Text = 'DER ASSISTENT SCHLÄGT EINE AKTION VOR'; $ht.FontWeight = 'Bold'; [void]$hd.Children.Add($ht)
     [void]$sp.Children.Add($hd)
     $tt = New-AiTb 15; $tt.Text = [string]$def.Title; $tt.FontWeight = 'SemiBold'; $tt.Margin = '0,6,0,2'; [void]$sp.Children.Add($tt)
     $det = Get-AiUseDetail $Use
@@ -40660,11 +40831,254 @@ function Invoke-AiAction($Use) {
                 return (New-AiActRes $t $false 'Zusammenfassung des letzten Laufs gesendet.')
             }
             'zustand_lesen' { return (New-AiActRes (Protect-AiText (Get-AiHealthText)) $false 'Zustand und Score gesendet.') }
+            'ereignisse_lesen' {
+                $d = 7; try { if ($in.tage) { $d = [int][math]::Max(1, [math]::Min(60, [int]$in.tage)) } } catch { }
+                $t = (@(Invoke-UiWait { param($x) Get-AiEventText $x } @($d) @('Get-AiEventText') 120 'Lese das Windows-Ereignisprotokoll ...') | ForEach-Object { [string]$_ }) -join "`n"
+                return (New-AiActRes (Protect-AiText $t) $false ('Ereignisprotokoll der letzten {0} Tage gesendet.' -f $d))
+            }
+            'abstuerze_lesen' {
+                $t = (@(Invoke-UiWait { Get-AiCrashText 90 } @() @('Get-AiCrashText') 120 'Suche Bluescreens und Abstürze ...') | ForEach-Object { [string]$_ }) -join "`n"
+                return (New-AiActRes (Protect-AiText $t) $false 'Bluescreens und Abstürze gesendet.')
+            }
+            'autostart_lesen' {
+                $en = @(Get-AutostartEntries $true | ForEach-Object { $_ } | Where-Object { $_ -and $_.Name })
+                $t = ('{0} Autostart-Einträge (Name | Quelle | Zustand | Einstufung):' -f $en.Count) + "`n" + ((@($en | ForEach-Object { '- {0} | {1} | {2} | {3}' -f $_.Name, $_.Source, $(if ($_.Enabled) { 'aktiv' } else { 'aus' }), $(if ($_.PSObject.Properties['Category']) { $_.Category } else { '' }) })) -join "`n")
+                return (New-AiActRes (Protect-AiText $t) $false ('{0} Autostart-Einträge gesendet.' -f $en.Count))
+            }
+            'treiber_lesen' {
+                $t = (@(Invoke-UiWait { Get-AiDriverText } @() @('Get-AiDriverText') 120 'Lese Geräte und Treiber ...') | ForEach-Object { [string]$_ }) -join "`n"
+                return (New-AiActRes (Protect-AiText $t) $false 'Geräte und Treiber gesendet.')
+            }
+            'updates_lesen' {
+                $t = (@(Invoke-UiWait { Get-AiUpdateText } @() @('Get-AiUpdateText') 300 'Lese Windows-Updates (bis zu 2 Minuten) ...') | ForEach-Object { [string]$_ }) -join "`n"
+                return (New-AiActRes (Protect-AiText $t) $false 'Update-Verlauf und ausstehende Updates gesendet.')
+            }
+            'netzwerkbericht_lesen' {
+                if (-not $script:Ndoc) { return (New-AiActRes 'In dieser Sitzung wurde das Netzwerk noch nicht erfasst. Der Nutzer kann auf der Seite "Netzwerk dokumentieren" auf "Netzwerk jetzt erfassen" klicken (dauert 1-3 Minuten).' $false 'Noch keine Netzwerk-Erfassung vorhanden.') }
+                return (New-AiActRes (Get-AiNetReportText $script:Ndoc) $false 'Netzwerk-Bericht gesendet.')
+            }
         }
         return (New-AiActRes ('Unbekannte Aktion "{0}" - nicht ausgeführt.' -f $Use.Name) $true)
     } catch { return (New-AiActRes ('Fehler bei der Ausführung: ' + $_.Exception.Message) $true) }
 }
 
+
+# ================================================================ KI 13.9: Automatik, Diagnose, Sprache, Gedächtnis
+# ---- Einmal-Anfrage ohne Werkzeuge (Auto-Diagnose, Wochenbericht, Gedächtnis). Rückruf: & $Done $Text $Fehler
+$script:AiShots = @{}
+function Test-AiAutoAllowed {
+    $s = Get-AiSettings
+    if (Get-AiNotReadyText $s) { return $false }
+    if ($s.Prov.Local) { return [bool](Get-OllamaExe) }
+    return [bool]$ui.Assistant_AutoCloud.IsChecked
+}
+function Invoke-AiOneShot([string]$Task, [string]$Data, [scriptblock]$Done, [int]$MaxTokens = 900) {
+    $s = Get-AiSettings
+    $why = Get-AiNotReadyText $s
+    if ($why) { & $Done '' $why; return }
+    $sys = "Du bist der KI-Assistent in PC-Tools (Version $AppVersion), einem Windows-Werkzeugkasten. Antworte immer auf Deutsch, freundlich und so einfach, dass es Menschen ohne IT-Wissen verstehen. Erfinde nichts: Wenn die Daten etwas nicht hergeben, sag das. Nenne konkrete nächste Schritte, möglichst mit den passenden Seiten von PC-Tools."
+    $msg = @([ordered]@{ role = 'user'; content = ($Task + "`n`n--- Daten ---`n" + (Limit-AiText (Protect-AiText $Data) 14000)) })
+    $json = if ($s.Kind -eq 'anthropic') { New-AiRequestBody $s.Model $sys $msg @() $MaxTokens } else { New-AiOpenAiBody $s.Model $sys $msg @() $MaxTokens ([string]$s.Prov.TokField) }
+    $id = [guid]::NewGuid().ToString('N'); $script:AiShots[$id] = $Done
+    $toSec = $(if ($s.Prov.Local -or $s.Provider -eq 'custom') { 600 } else { 150 })
+    Invoke-Bg -Script { param($k, $b, $url, $ver, $kind, $to, $i) [pscustomobject]@{ ShotId = $i; Res = (Invoke-AiMessages $k $b $url $ver $kind $to) } } -Arguments @([string](Get-AiKey $DataDir $s.Provider), [Text.Encoding]::UTF8.GetBytes($json), $s.Url, $AiApiVersion, $s.Kind, $toSec, $id) -Functions @('Invoke-AiMessages', 'Invoke-AiHttp') -Done {
+        param($r, $err)
+        $x = $null; foreach ($y in @($r)) { if ($y -and $y.PSObject.Properties['ShotId']) { $x = $y } }
+        if (-not $x) { foreach ($k in @($script:AiShots.Keys)) { $cb = $script:AiShots[$k]; $script:AiShots.Remove($k); try { & $cb '' $(if ($err) { $err.Message } else { 'keine Antwort' }) } catch { } }; return }
+        $cb = $script:AiShots[[string]$x.ShotId]; $script:AiShots.Remove([string]$x.ShotId)
+        if (-not $cb) { return }
+        $res = $x.Res; $nm = [string](Get-AiSettings).Prov.Name
+        if (-not $res -or [int]$res.Status -ne 200) { try { & $cb '' (Get-AiErrorText ([int]$res.Status) ([string]$res.Body) ([string]$res.Error) $nm) } catch { }; return }
+        try {
+            $p = ConvertFrom-AiResponse ([string]$res.Body)
+            try { $null = Add-AiUsage (Get-AiUsageFile $DataDir) $p.InTokens $p.OutTokens } catch { }
+            & $cb ([string]$p.Text) ''
+        } catch { try { & $cb '' $_.Exception.Message } catch { } }
+    }
+}
+# Ergebnis einer Automatik im Chat zeigen und als Gesprächsteil merken (damit Rückfragen funktionieren)
+function Add-AiAutoResult([string]$Title, [string]$Question, [string]$Text) {
+    if (-not $Text) { return }
+    try {
+        Add-AiNote $Title
+        Add-AiAssistantBubble $Text
+        if (-not $script:AiBusy -and -not $script:AiPending) {
+            $last = $null; if ($script:AiHistory.Count) { $last = $script:AiHistory[$script:AiHistory.Count - 1] }
+            if (-not $last -or [string]$last.role -eq 'assistant') {
+                $script:AiHistory.Add([ordered]@{ role = 'user'; content = $Question })
+                $script:AiHistory.Add([ordered]@{ role = 'assistant'; content = @([ordered]@{ type = 'text'; text = $Text }) })
+            }
+        }
+        Save-AiChat
+        if ($ui.Assistant_Speak.IsChecked -and $ui.Tabs.SelectedItem -eq $ui.TabAssistant) { Invoke-AiSpeak $Text }
+    } catch { }
+}
+
+# ---- Automatische Diagnose nach jedem Pflegelauf
+function Start-AiAutoDiag([string[]]$Parts) {
+    if (-not $ui.Assistant_AutoDiag.IsChecked) { return }
+    if (@($Parts) -contains 'NiniteInstall') { return }
+    if (-not (Test-AiAutoAllowed)) { return }
+    $log = Get-AiLogSummary (Join-Path $DataDir 'Logs')
+    if (-not $log) { return }
+    $ui.StatusText.Text = 'KI-Diagnose: Die KI wertet den Pflegelauf aus ...'
+    Invoke-AiOneShot 'Hier ist die Zusammenfassung des gerade beendeten PC-Tools-Pflegelaufs. Erkläre in höchstens 5 kurzen Sätzen, was passiert ist und ob alles in Ordnung ist. Wenn es Warnungen oder Fehler gibt: Was bedeuten sie, und was sollte der Nutzer jetzt tun (wichtigstes zuerst)? Wenn alles gut ist, sag das einfach.' $log {
+        param($t, $e)
+        if ($e) { $ui.StatusText.Text = 'KI-Diagnose nicht möglich: ' + $e; return }
+        try { $f = Join-Path (Join-Path $DataDir 'Assistant') 'diagnose-letzter-lauf.txt'; New-Item (Split-Path -Parent $f) -ItemType Directory -Force | Out-Null; [IO.File]::WriteAllText($f, ('{0:dd.MM.yyyy HH:mm}' -f (Get-Date)) + "`r`n" + $t, (New-Object Text.UTF8Encoding $true)) } catch { }
+        Add-AiAutoResult ('Automatische Diagnose nach dem Pflegelauf ({0:HH:mm})' -f (Get-Date)) 'Erkläre mir kurz das Ergebnis des letzten Pflegelaufs.' $t
+        $ui.StatusText.Text = 'KI-Diagnose fertig - im KI-Assistenten ansehen (Strg+Umschalt+A).'
+    }
+}
+
+# ---- Wochen-Zusammenfassung
+function Start-AiWeekly([switch]$Force) {
+    if (-not $Force) {
+        if (-not $ui.Assistant_Weekly.IsChecked -or -not (Test-AiAutoAllowed)) { return }
+        $f = Join-Path (Join-Path $DataDir 'Assistant') 'woche-zuletzt.txt'
+        try { if ((Test-Path -LiteralPath $f) -and (Get-Item -LiteralPath $f).LastWriteTime -gt (Get-Date).AddDays(-7)) { return } } catch { }
+    } else {
+        $why = Get-AiNotReadyText (Get-AiSettings); if ($why) { Add-AiNote $why 'Warn'; return }
+        Add-AiNote 'Sammle die Daten der letzten 7 Tage (Läufe, Abstürze, Ereignisprotokoll, Updates) ...'
+    }
+    Invoke-Bg -Script { param($ld) Get-AiWeekData $ld } -Arguments @((Join-Path $DataDir 'Logs')) -Functions @('Get-AiWeekData') -Done {
+        param($r, $err)
+        $d = (@($r) | ForEach-Object { [string]$_ }) -join "`n"
+        if (-not $d) { return }
+        Invoke-AiOneShot 'Schreibe eine kurze Wochen-Zusammenfassung "Was ist diese Woche auf deinem PC passiert?" für einen Laien: höchstens 8 Stichpunkte (gut gelaufen / Auffälligkeiten / Abstürze / Updates) und zum Schluss 1-3 konkrete Empfehlungen, wichtigstes zuerst. Harmlose Routine-Fehler im Ereignisprotokoll nicht dramatisieren.' $d {
+            param($t, $e)
+            if ($e) { $ui.StatusText.Text = 'Wochen-Zusammenfassung nicht möglich: ' + $e; return }
+            try { $f = Join-Path (Join-Path $DataDir 'Assistant') 'woche-zuletzt.txt'; New-Item (Split-Path -Parent $f) -ItemType Directory -Force | Out-Null; [IO.File]::WriteAllText($f, ('{0:dd.MM.yyyy HH:mm}' -f (Get-Date)) + "`r`n" + $t, (New-Object Text.UTF8Encoding $true)) } catch { }
+            Add-AiAutoResult ('Deine Wochen-Zusammenfassung ({0:dd.MM.yyyy})' -f (Get-Date)) 'Was ist diese Woche auf meinem PC passiert?' $t
+            $ui.StatusText.Text = 'Neue Wochen-Zusammenfassung im KI-Assistenten.'
+        } 1100
+    }
+}
+$script:AiWeekTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:AiWeekTimer.Interval = [TimeSpan]::FromSeconds(90)
+$script:AiWeekTimer.Add_Tick({ $script:AiWeekTimer.Stop(); try { if (-not $script:Job) { Start-AiWeekly } } catch { } })
+
+# ---- Gespräch je PC speichern / laden, Gedächtnis
+function Save-AiChat {
+    try {
+        if (-not $ui.Assistant_SaveChat.IsChecked) { return }
+        $f = Get-AiChatFile $DataDir; New-Item (Split-Path -Parent $f) -ItemType Directory -Force | Out-Null
+        $ents = @($script:AiEntries | Where-Object { $_.Role -in 'user', 'assistant', 'note' } | Select-Object -Last 80 | ForEach-Object { [ordered]@{ Role = $_.Role; Time = $_.Time.ToString('o'); Text = [string]$_.Text } })
+        $obj = [ordered]@{ Saved = (Get-Date).ToString('o'); History = @($script:AiHistory.ToArray()); Entries = $ents }
+        [IO.File]::WriteAllText($f, (ConvertTo-AiJson $obj), (New-Object Text.UTF8Encoding $false))
+    } catch { }
+}
+function Restore-AiChat {
+    if (-not $ui.Assistant_SaveChat.IsChecked) { return }
+    $f = Get-AiChatFile $DataDir
+    if (-not (Test-Path -LiteralPath $f)) { return }
+    try {
+        $j = [IO.File]::ReadAllText($f, [Text.Encoding]::UTF8) | ConvertFrom-Json
+        if (-not $j -or -not @($j.Entries).Count) { return }
+        $script:AiHistory = [System.Collections.Generic.List[object]]::new(); foreach ($m in @($j.History)) { if ($m) { $script:AiHistory.Add($m) } }
+        $script:AiEntries.Clear()
+        foreach ($e in @($j.Entries)) {
+            switch ([string]$e.Role) { 'user' { Add-AiUserBubble ([string]$e.Text) @() } 'assistant' { Add-AiAssistantBubble ([string]$e.Text) } default { Add-AiNote ([string]$e.Text) } }
+        }
+        $dt = ''; try { $dt = ([datetime]$j.Saved).ToString('dd.MM.yyyy HH:mm') } catch { }
+        Add-AiNote ('Gespräch vom {0} fortgesetzt. "Neues Gespräch" beginnt von vorn.' -f $dt)
+    } catch { }
+}
+function Save-AiMemoryFromChat {
+    # beim Beginn eines neuen Gesprächs: wichtigste Probleme/Lösungen kurz merken
+    if (-not $ui.Assistant_Memory.IsChecked) { return }
+    $txt = (@($script:AiEntries | Where-Object { $_.Role -in 'user', 'assistant' } | Select-Object -Last 20 | ForEach-Object { '{0}: {1}' -f $(if ($_.Role -eq 'user') { 'Nutzer' } else { 'Assistent' }), (Limit-AiText ([string]$_.Text) 1200) }) -join "`n")
+    if ($txt.Length -lt 40 -or (Get-AiNotReadyText (Get-AiSettings))) { return }
+    if (-not (Get-AiSettings).Prov.Local -and -not $ui.Assistant_AutoCloud.IsChecked) {
+        # Online-KI: nur einfache Notiz ohne zusätzliche Anfrage (die Fragen selbst)
+        $qs = @($script:AiEntries | Where-Object { $_.Role -eq 'user' } | Select-Object -Last 3 | ForEach-Object { 'Frage: ' + (Limit-AiText ([string]$_.Text) 160) })
+        if ($qs.Count) { try { Add-AiMemory $DataDir ($qs -join "`n") } catch { } }
+        return
+    }
+    Invoke-AiOneShot 'Fasse dieses Gespräch für das Gedächtnis des Assistenten zusammen: höchstens 3 Zeilen im Format "Problem -> Ergebnis/Lösung". Nur Dinge, die für spätere Fragen zu diesem PC nützlich sind. Keine Kennwörter, keine persönlichen Daten. Wenn nichts Wichtiges dabei war, antworte nur mit "-".' $txt {
+        param($t, $e)
+        if ($e -or -not $t -or $t.Trim() -eq '-') { return }
+        try { Add-AiMemory $DataDir $t } catch { }
+    } 300
+}
+
+# ---- Sprache: Diktat (Windows-Spracheingabe Win+H) und Vorlesen
+function Start-AiDictation {
+    try {
+        if (-not ('PcTools.Kb' -as [type])) { Add-Type -Namespace PcTools -Name Kb -MemberDefinition '[DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);' }
+        [void]$ui.AiInput.Focus(); $ui.AiInput.CaretIndex = $ui.AiInput.Text.Length
+        Invoke-UiDoEvents; Start-Sleep -Milliseconds 150
+        [PcTools.Kb]::keybd_event(0x5B, 0, 0, [UIntPtr]::Zero); [PcTools.Kb]::keybd_event(0x48, 0, 0, [UIntPtr]::Zero)
+        [PcTools.Kb]::keybd_event(0x48, 0, 2, [UIntPtr]::Zero); [PcTools.Kb]::keybd_event(0x5B, 0, 2, [UIntPtr]::Zero)
+        $ui.StatusText.Text = 'Spracheingabe von Windows geöffnet - einfach sprechen, der Text erscheint im Eingabefeld. Danach Enter drücken.'
+    } catch { $ui.StatusText.Text = 'Spracheingabe nicht möglich: ' + $_.Exception.Message + ' (Alternativ Windows-Taste + H drücken.)' }
+}
+$script:AiSynth = $null
+function Invoke-AiSpeak([string]$Text) {
+    try {
+        if (-not $script:AiSynth) {
+            Add-Type -AssemblyName System.Speech
+            $script:AiSynth = New-Object System.Speech.Synthesis.SpeechSynthesizer
+            $v = @($script:AiSynth.GetInstalledVoices() | Where-Object { $_.Enabled -and $_.VoiceInfo.Culture.TwoLetterISOLanguageName -eq 'de' } | Select-Object -First 1)
+            if ($v.Count) { $script:AiSynth.SelectVoice($v[0].VoiceInfo.Name) }
+            $script:AiSynth.Rate = 0
+        }
+        if ([string]$script:AiSynth.State -eq 'Speaking') { $script:AiSynth.SpeakAsyncCancelAll(); return }
+        $t = ConvertTo-AiSpeechText $Text
+        if ($t) { [void]$script:AiSynth.SpeakAsync($t) }
+    } catch { $ui.StatusText.Text = 'Vorlesen nicht möglich: ' + $_.Exception.Message }
+}
+function Stop-AiSpeak { try { if ($script:AiSynth) { $script:AiSynth.SpeakAsyncCancelAll() } } catch { } }
+
+# ---- Kostenlose KI ohne Zutun: Ollama einrichten (auch automatisch beim ersten Senden)
+$script:AiQueued = ''
+function Start-AiOllamaSetup([switch]$Auto) {
+    if ($script:AiOllamaBusy) { return }
+    $m = ([string]$ui.AiModelBox.Text).Trim(); if (-not $m) { $m = Get-OllamaSuggestedModel; $ui.AiModelBox.Text = $m }
+    $inst = [bool](Get-OllamaExe)
+    $size = $(if ($m -match '8b') { 'ca. 5 GB' } elseif ($m -match '20b') { 'ca. 13 GB' } else { 'ca. 2,5 GB' })
+    if (-not $inst -and -not (Confirm-Ui ("Die kostenlose KI wird jetzt einmalig eingerichtet:`n`n- Ollama (Open Source, ca. 1 GB) wird installiert`n- das KI-Modell {0} ({1}) wird geladen`n`nDanach antwortet der Assistent ohne Konto und ohne Kosten, und deine Fragen verlassen diesen PC nicht. Dauer je nach Internet 5-30 Minuten, PC-Tools bleibt bedienbar.`n`nJetzt einrichten?" -f $m, $size))) { $script:AiQueued = ''; return }
+    Save-AiSettings
+    $script:AiOllamaBusy = $true
+    $ui.AiBtnOllamaSetup.IsEnabled = $false; $ui.AiOllamaProg.Visibility = 'Visible'; try { $ui.AiBtnQuickSetup.IsEnabled = $false } catch { }
+    $msg = $(if ($inst) { ('Ollama wird gestartet und das Modell {0} geladen ({1}) ...' -f $m, $size) } else { ('Kostenlose KI wird eingerichtet: Ollama installieren und Modell {0} laden ({1}) - das kann 5-30 Minuten dauern.' -f $m, $size) })
+    $ui.AiOllamaState.Text = $msg; Add-AiNote ($msg + ' Du kannst PC-Tools so lange normal weiter benutzen.')
+    $ui.StatusText.Text = 'KI-Assistent: ' + $msg
+    Invoke-Bg -Script { param($mm) Install-OllamaModel $mm -InstallApp } -Arguments @($m) -Functions @('Install-OllamaModel') -Done {
+        param($r, $err)
+        $script:AiOllamaBusy = $false
+        $ui.AiOllamaProg.Visibility = 'Collapsed'; $ui.AiBtnOllamaSetup.IsEnabled = $true; try { $ui.AiBtnQuickSetup.IsEnabled = $true } catch { }
+        $lines = @($r | ForEach-Object { [string]$_ } | Where-Object { $_ })
+        $ok = [bool](@($lines | Where-Object { $_ -match '^OK:|bereits geladen' }).Count)
+        $ui.AiKeyTestInfo.Text = $(if ($err) { 'Fehler: ' + $err.Message } else { $lines -join "`n" })
+        if ($ok) { Add-AiNote ([string][char]0x2713 + ' Die kostenlose KI ist eingerichtet und läuft auf diesem PC.') } else { Add-AiNote ('Einrichtung nicht abgeschlossen: ' + $(if ($err) { $err.Message } else { ($lines | Select-Object -Last 1) })) 'Warn' }
+        Update-AiOllamaUi; Update-AiKeyUi; Update-AiWelcomeSetup
+        if ($ok -and $script:AiQueued) { $q = $script:AiQueued; $script:AiQueued = ''; $ui.AiInput.Text = $q; Send-AiQuestion $q -FromInput }
+    }
+}
+function Update-AiWelcomeSetup {
+    try {
+        $s = Get-AiSettings
+        $show = $false
+        if ($s.Prov.Local) { $show = -not [bool](Get-OllamaExe) } elseif (Get-AiNotReadyText $s) { $show = $true }
+        $ui.AiSetupPanel.Visibility = $(if ($show) { 'Visible' } else { 'Collapsed' })
+    } catch { }
+}
+
+# ---- Netzwerk-Bericht als Text für die KI
+function Get-AiNetReportText($Res) {
+    $o = [System.Collections.Generic.List[string]]::new()
+    $rows = @($Res.Rows | Where-Object { $_ -and -not $_.Offline }); $find = @($Res.Find | Sort-Object SevNo)
+    $sc = $null; try { $sc = Get-NdocScore $find } catch { }
+    $o.Add(('Netzwerk {0}/{1}: {2} Geräte online{3}' -f $Res.Data.Net.Ip, $Res.Data.Net.Prefix, $rows.Count, $(if ($sc) { ', Bewertung {0}/100 ({1})' -f $sc.Score, $sc.Grade } else { '' })))
+    $o.Add(''); $o.Add(('Befunde ({0}), wichtigste zuerst:' -f $find.Count))
+    foreach ($f in @($find | Select-Object -First 40)) { $o.Add(('- [{0}] {1}: {2} - {3} Maßnahme: {4}' -f $f.Sev, $f.Device, $f.Title, $f.Detail, $f.Fix)) }
+    $ex = @($Res.Exposure)
+    if ($ex.Count) { $o.Add(''); $o.Add('Von außen erreichbar:'); foreach ($e in @($ex | Select-Object -First 15)) { $o.Add('- ' + ((@($e.PSObject.Properties | ForEach-Object { '{0}={1}' -f $_.Name, $_.Value })) -join '; ')) } }
+    $o.Add(''); $o.Add('Geräte (Name | Typ | Hersteller | offene Dienste):')
+    foreach ($r in @($rows | Select-Object -First 60)) { $o.Add(('- {0} | {1} | {2} | {3}' -f $r.Name, $(if ($r.PSObject.Properties['Type']) { $r.Type } else { '' }), $(if ($r.PSObject.Properties['Vendor']) { $r.Vendor } else { '' }), $(if ($r.PSObject.Properties['Ports']) { $r.Ports } else { '' }))) }
+    return ($o -join "`n")
+}
 # ---- Bereit? (leer = ja, sonst Hinweistext)
 function Get-AiNotReadyText($S) {
     $pv = $S.Prov
@@ -40685,6 +41099,7 @@ function Invoke-AiRequest {
     if ($trim.Count -lt $script:AiHistory.Count) { $script:AiHistory = $trim; Add-AiNote 'Das Gespräch ist lang geworden - die ältesten Teile werden nicht mehr mitgeschickt.' }
     $pages = @(Get-AiPageList)
     $sys = Get-AiSystemPrompt $AppVersion (Get-AiFeatureText $pages $ManualChapters) (New-AiContextText (Get-AiContextParts $s))
+    if ($ui.Assistant_Memory.IsChecked) { $mem = Get-AiMemoryText $DataDir; if ($mem) { $sys += "`n`nFrühere Probleme und Ergebnisse auf diesem PC (aus früheren Gesprächen, nur zur Orientierung):`n" + (Limit-AiText (Protect-AiText $mem) 3000) } }
     $tools = Get-AiToolDefs $pages $WrProfiles
     $json = if ($s.Kind -eq 'anthropic') { New-AiRequestBody $s.Model $sys $script:AiHistory.ToArray() $tools.ToArray() $s.MaxTokens } else { New-AiOpenAiBody $s.Model $sys $script:AiHistory.ToArray() $tools.ToArray() $s.MaxTokens ([string]$s.Prov.TokField) }
     $toSec = $(if ($s.Prov.Local -or $s.Provider -eq 'custom') { 600 } else { 150 })
@@ -40718,8 +41133,13 @@ function Complete-AiRequest($R, $Err) {
     if ($Err -or -not $res) { Add-AiFail ('Interner Fehler: ' + $(if ($Err) { $Err.Message } else { 'keine Antwort erhalten' })); return }
     $cs = Get-AiSettings
     if ([int]$res.Status -ne 200) {
-        if ($cs.Provider -eq 'ollama' -and [int]$res.Status -eq 0) { Add-AiFail 'Ollama antwortet nicht - ist es installiert und gestartet? Rechts unter "Verbindung zur KI" auf "Ollama einrichten" klicken.'; return }
-        if ($cs.Provider -eq 'ollama' -and [int]$res.Status -eq 404) { Add-AiFail ('Das Modell {0} ist in Ollama noch nicht geladen. Rechts auf "Ollama einrichten" klicken (lädt es herunter).' -f $cs.Model); return }
+        if ($cs.Provider -eq 'ollama' -and [int]$res.Status -in 0, 404) {
+            # automatisch reparieren: Ollama starten bzw. Modell laden, danach die Frage erneut senden
+            $lastQ = ''; if ($script:AiHistory.Count -and [string]$script:AiHistory[$script:AiHistory.Count - 1].role -eq 'user') { $lm = $script:AiHistory[$script:AiHistory.Count - 1]; $lastQ = $(if ($lm.content -is [string]) { [string]$lm.content } else { '' }); $script:AiHistory.RemoveAt($script:AiHistory.Count - 1) }
+            Add-AiNote $(if ([int]$res.Status -eq 404) { ('Das Modell {0} fehlt noch - PC-Tools lädt es jetzt automatisch.' -f $cs.Model) } else { 'Ollama lief nicht - PC-Tools richtet es jetzt automatisch ein.' })
+            if ($lastQ) { $script:AiQueued = ($lastQ -split "`n")[0] }
+            Start-AiOllamaSetup -Auto; return
+        }
         Add-AiFail (Get-AiErrorText ([int]$res.Status) ([string]$res.Body) ([string]$res.Error) ([string]$cs.Prov.Name)); return
     }
     $p = $null
@@ -40732,14 +41152,22 @@ function Complete-AiRequest($R, $Err) {
     $ui.StatusText.Text = ('KI-Assistent: Antwort erhalten ({0:N0} + {1:N0} Token).' -f $p.InTokens, $p.OutTokens)
     $uses = @($p.ToolUses)
     if ($uses.Count) { Start-AiPending $uses } else { $script:AiRounds = 0 }
+    Save-AiChat
+    if ($p.Text -and $ui.Assistant_Speak.IsChecked) { Invoke-AiSpeak $p.Text }
 }
 function Send-AiQuestion([string]$Text, [switch]$FromInput) {
     $q = ([string]$Text).Trim()
     if (-not $q) { return }
     if ($script:AiBusy) { $ui.StatusText.Text = 'Der Assistent antwortet noch - bitte einen Moment.'; return }
     $why = Get-AiNotReadyText (Get-AiSettings)
-    if ($why) { Add-AiNote $why 'Warn'; Set-AiSidebar $true; return }
+    if ($why) { Add-AiNote $why 'Warn'; Set-AiSidebar $true; Update-AiWelcomeSetup; return }
     $s = Get-AiSettings
+    if ($s.Prov.Local -and -not (Get-OllamaExe)) {
+        # kostenlose KI noch nicht da: einmal einrichten, danach wird die Frage automatisch gesendet
+        $script:AiQueued = $q
+        if ($script:AiOllamaBusy) { Add-AiNote 'Die kostenlose KI wird gerade noch eingerichtet - deine Frage wird danach automatisch gesendet.'; return }
+        Start-AiOllamaSetup -Auto; return
+    }
     if (Test-AiLimitReached (Get-AiUsage (Get-AiUsageFile $DataDir)) $s.Limit) { Add-AiNote ('Das Monatslimit von {0:N0} Token ist erreicht - der Assistent pausiert bis zum nächsten Monat.' -f $s.Limit) 'Warn'; return }
     $att = @($script:AiAttach.ToArray())
     $userText = New-AiUserText $q $att
@@ -40776,6 +41204,7 @@ function Invoke-AiClaudeAi {
     $ui.AiInput.Clear(); $script:AiAttach.Clear(); Update-AiAttachUi
 }
 function Invoke-AiChip([string]$Question) {
+    if ($Question -like 'Was ist diese Woche*' -and -not (Get-AiNotReadyText (Get-AiSettings))) { Add-AiUserBubble $Question @(); Start-AiWeekly -Force; return }
     if (-not (Get-AiNotReadyText (Get-AiSettings))) { Send-AiQuestion $Question }
     else { $ui.AiInput.Text = $Question; Invoke-AiClaudeAi }
 }
@@ -40792,6 +41221,9 @@ function New-AiChips {
     }
 }
 function Reset-AiChat {
+    try { Save-AiMemoryFromChat } catch { }
+    try { $cf = Get-AiChatFile $DataDir; if (Test-Path -LiteralPath $cf) { Remove-Item -LiteralPath $cf -Force } } catch { }
+    Stop-AiSpeak
     $script:AiHistory = [System.Collections.Generic.List[object]]::new()
     $script:AiEntries.Clear(); $script:AiPending = $null; $script:AiFailedMsg = $null; $script:AiRounds = 0
     $script:AiAttach.Clear(); Update-AiAttachUi
@@ -40862,8 +41294,8 @@ function Update-AiUsageUi {
 }
 function Update-AiOnOpen {
     try {
-        if (-not $script:AiOpened) { $script:AiOpened = $true; try { New-AiChips } catch { } }
-        Update-AiKeyUi; Update-AiUsageUi; Update-AiCtxLabel; Update-AiOllamaUi
+        if (-not $script:AiOpened) { $script:AiOpened = $true; try { New-AiChips } catch { }; try { Restore-AiChat } catch { } }
+        Update-AiKeyUi; Update-AiUsageUi; Update-AiCtxLabel; Update-AiOllamaUi; Update-AiWelcomeSetup
     } catch { }
 }
 function Show-AiPreview {
@@ -40875,6 +41307,7 @@ function Show-AiPreview {
     [void]$sb.AppendLine($(if ($ctx) { $ctx } else { '(keine - nur deine Frage und der Gesprächsverlauf)' }))
     foreach ($a in $script:AiAttach) { [void]$sb.AppendLine(); [void]$sb.AppendLine(('## Anhang: {0}' -f $a.Label)); [void]$sb.AppendLine((Protect-AiText ([string]$a.Text))) }
     [void]$sb.AppendLine()
+    if ($ui.Assistant_Memory.IsChecked) { $mm = Get-AiMemoryText $DataDir; if ($mm) { [void]$sb.AppendLine(); [void]$sb.AppendLine('Gedächtnis (frühere Probleme auf diesem PC):'); [void]$sb.AppendLine($mm) } }
     [void]$sb.AppendLine('Immer dabei: Anweisungen für die KI (Rolle, Antwortstil, Liste der PC-Tools-Seiten und der erlaubten Aktionen) - ohne persönliche Daten.')
     $x = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -41115,23 +41548,17 @@ $ui.AiModelBox.Add_DropDownClosed({ if ($script:AiProvInit) { Save-AiSettings; U
 $ui.AiModelBox.Add_LostFocus({ if ($script:AiProvInit) { Save-AiSettings; Update-AiKeyUi } })
 $ui.Assistant_CustomUrl.Add_LostFocus({ if ($script:AiProvInit) { Save-AiSettings; Update-AiKeyUi } })
 $ui.AiBtnOllamaCheck.Add_Click({ Update-AiOllamaUi })
-$ui.AiBtnOllamaSetup.Add_Click({
-    $m = ([string]$ui.AiModelBox.Text).Trim(); if (-not $m) { $m = Get-OllamaSuggestedModel; $ui.AiModelBox.Text = $m }
-    $inst = [bool](Get-OllamaExe)
-    if (-not $inst -and -not (Confirm-Ui ("Ollama (kostenlose KI für diesen PC, Open Source) jetzt installieren und das Modell {0} herunterladen?`n`nDownload: ca. 1 GB Programm + {1} Modell. Danach läuft der Assistent ohne Konto und ohne Kosten - deine Fragen verlassen den PC nicht." -f $m, $(if ($m -match '8b') { 'ca. 5 GB' } elseif ($m -match '20b') { 'ca. 13 GB' } else { 'ca. 2,5 GB' })))) { return }
-    Save-AiSettings
-    $ui.AiBtnOllamaSetup.IsEnabled = $false; $ui.AiOllamaProg.Visibility = 'Visible'
-    $ui.AiOllamaState.Text = $(if ($inst) { ('Starte Ollama und lade {0} - das kann einige Minuten dauern ...' -f $m) } else { ('Installiere Ollama und lade {0} - das kann 5-30 Minuten dauern. PC-Tools bleibt bedienbar.' -f $m) })
-    Invoke-Bg -Script { param($mm) Install-OllamaModel $mm -InstallApp } -Arguments @($m) -Functions @('Install-OllamaModel', 'Get-OllamaExe', 'Get-OllamaState', 'Start-OllamaServer', 'Invoke-AiHttp', 'Invoke-NdCmd', 'ConvertTo-AiJson', 'ConvertTo-AiJsonString') -Done {
-        param($r, $err)
-        $ui.AiOllamaProg.Visibility = 'Collapsed'; $ui.AiBtnOllamaSetup.IsEnabled = $true
-        $lines = @($r | ForEach-Object { [string]$_ } | Where-Object { $_ })
-        $ui.AiKeyTestInfo.Text = $(if ($err) { 'Fehler: ' + $err.Message } else { $lines -join "`n" })
-        Update-AiOllamaUi; Update-AiKeyUi
-    }
-})
-foreach ($aiN in 'Assistant_CtxPage', 'Assistant_CtxSystem', 'Assistant_CtxHealth', 'Assistant_CtxLog', 'Assistant_CtxSelection', 'Assistant_ErrorButton') { if ($ui[$aiN]) { $ui[$aiN].Add_Click({ Save-AiSettings; Update-AiCtxLabel }) } }
+$ui.AiBtnOllamaSetup.Add_Click({ Start-AiOllamaSetup })
+foreach ($aiN in 'Assistant_CtxPage', 'Assistant_CtxSystem', 'Assistant_CtxHealth', 'Assistant_CtxLog', 'Assistant_CtxSelection', 'Assistant_ErrorButton', 'Assistant_AutoDiag', 'Assistant_AutoCloud', 'Assistant_Weekly', 'Assistant_SaveChat', 'Assistant_Memory', 'Assistant_Speak') { if ($ui[$aiN]) { $ui[$aiN].Add_Click({ Save-AiSettings; Update-AiCtxLabel }) } }
 try { Initialize-AiProvider } catch { }
+$ui.AiBtnQuickSetup.Add_Click({
+    foreach ($it in $ui.AiProvider.Items) { if ([string]$it.Tag -eq 'ollama') { $ui.AiProvider.SelectedItem = $it } }
+    Start-AiOllamaSetup
+})
+$ui.AiBtnMic.Add_Click({ Start-AiDictation })
+$ui.AiBtnMemShow.Add_Click({ $m = Get-AiMemoryText $DataDir; [Windows.MessageBox]::Show($(if ($m) { $m } else { 'Noch nichts gemerkt. Einträge entstehen, wenn du "Neues Gespräch" beginnst.' }), 'PC-Tools - Gedächtnis des KI-Assistenten', 'OK', 'Information') | Out-Null })
+$ui.AiBtnMemClear.Add_Click({ if (Confirm-Ui 'Alles löschen, was sich der KI-Assistent zu diesem PC gemerkt hat?') { try { $f = Get-AiMemoryFile $DataDir; if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force }; $ui.StatusText.Text = 'Gedächtnis gelöscht.' } catch { Show-UiError $_.Exception.Message } } })
+try { $script:AiWeekTimer.Start() } catch { }
 $ui.Assistant_KeyScope.Add_DropDownClosed({ Save-AiSettings; $ui.AiKeyTestInfo.Text = 'Gilt beim nächsten Speichern des Schlüssels. "Alle Konten" ist praktisch, wenn PC-Tools auch unter anderen Konten laufen soll - dann kann aber jedes Programm auf diesem PC den Schlüssel entschlüsseln.' })
 foreach ($aiN in 'Assistant_MonthlyLimit', 'Assistant_MaxTokens') { if ($ui[$aiN]) { $ui[$aiN].Add_LostFocus({ param($s, $e) $dg = ([string]$s.Text) -replace '[^\d]', ''; if ([string]$s.Text -ne $dg) { $s.Text = $dg }; Save-AiSettings; Update-AiUsageUi }) } }
 $ui.Tabs.Add_SelectionChanged({
@@ -41859,7 +42286,7 @@ if ($ui.WlRoomGrid) {
 # ---------------------------------------------------------------- Netzwerk dokumentieren
 if ($ui.NdocDevGrid) {
     $script:NdocDir = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'PC-Tools Berichte'
-    $ui.BtnNdocPdf.IsEnabled = $false
+    $ui.BtnNdocPdf.IsEnabled = $false; $ui.BtnNdocAi.IsEnabled = $false
     $script:NdocKnxMon = $null
     try {
         $set = Read-NdocJson 'einstellungen.json' $null
@@ -41889,7 +42316,7 @@ if ($ui.NdocDevGrid) {
     $ui.BtnNdocScan.Add_Click({
         if ($script:Job) { Show-UiError 'Es läuft bereits eine Aufgabe - bitte warten.'; return }
         try { & $script:NdocSaveSet } catch { }
-        $ui.BtnNdocScan.IsEnabled = $false; $ui.BtnNdocPdf.IsEnabled = $false
+        $ui.BtnNdocScan.IsEnabled = $false; $ui.BtnNdocPdf.IsEnabled = $false; $ui.BtnNdocAi.IsEnabled = $false
         $sync = Start-NtProgress $ui.NdocProg $ui.NdocState 'Starte ...'
         $opt = @{ Ext = [bool]$ui.NdocExt.IsChecked }
         if ($ui.NdocFbPass.Password) { $opt.FbUser = $ui.NdocFbUser.Text.Trim(); $opt.FbPass = (ConvertTo-SecureString $ui.NdocFbPass.Password -AsPlainText -Force) }
@@ -41903,7 +42330,7 @@ if ($ui.NdocDevGrid) {
             try {
                 $script:Ndoc = Complete-NdocResult $x $script:NtDevFile
                 & $script:NdocShow
-                $ui.BtnNdocPdf.IsEnabled = $true
+                $ui.BtnNdocPdf.IsEnabled = $true; $ui.BtnNdocAi.IsEnabled = $true
                 Stop-NtProgress $ui.NdocProg $ui.NdocState ('Erfasst um ' + (Get-Date -Format 'HH:mm') + ' - jetzt "PDF-Bericht erstellen".')
             } catch { Stop-NtProgress $ui.NdocProg $ui.NdocState ('Auswertung fehlgeschlagen: ' + $_.Exception.Message) }
         }
@@ -41923,6 +42350,13 @@ if ($ui.NdocDevGrid) {
             Stop-NtProgress $ui.NdocProg $ui.NdocState ('Bericht gespeichert: ' + $f + $(if ($f -notmatch '\.pdf$') { ' (Edge fehlt - als HTML gespeichert, im Browser als PDF drucken)' } else { '' }))
             try { Start-Process $f } catch { }
         }
+    })
+    $ui.BtnNdocAi.Add_Click({
+        if (-not $script:Ndoc) { return }
+        $t = Get-AiNetReportText $script:Ndoc
+        Open-AiAssistant
+        $script:AiAttach.Add([pscustomobject]@{ Label = 'Netzwerk-Bericht'; Text = (Limit-AiText $t 12000) }); Update-AiAttachUi
+        Send-AiQuestion 'Fasse diesen Netzwerk-Bericht in einfachen Worten zusammen (3-4 Sätze: Wie sicher ist das Netzwerk insgesamt?) und gib mir danach eine nummerierte Maßnahmenliste nach Wichtigkeit (Kritisch zuerst), jeweils mit dem konkreten Schritt und dem betroffenen Gerät.'
     })
     $ui.BtnNdocKnxMon.Add_Click({
         $net = $null; try { $net = Get-NtActiveNet } catch { }
