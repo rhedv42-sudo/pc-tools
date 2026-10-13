@@ -1796,16 +1796,40 @@ namespace PcTools {
             var f = new FrameworkElementFactory(typeof(TextBlock));
             f.SetBinding(TextBlock.TextProperty, new Binding(".") { Converter = TrConv.I });
             tpl = new DataTemplate { VisualTree = f }; tpl.Seal();
-            EventManager.RegisterClassHandler(typeof(FrameworkElement), FrameworkElement.LoadedEvent, new RoutedEventHandler(OnLoaded), true);
+            // Loaded wird nur am Fenster zuverlässig gemeldet - dort den ganzen Baum übersetzen und später hinzukommende Elemente (gedrosselt) nachziehen
+            EventManager.RegisterClassHandler(typeof(Window), FrameworkElement.LoadedEvent, new RoutedEventHandler(OnWinLoaded), true);
             EventManager.RegisterClassHandler(typeof(FrameworkElement), FrameworkElement.ToolTipOpeningEvent, new ToolTipEventHandler(OnTip), true);
         }
+        static ConditionalWeakTable<object, object> done = new ConditionalWeakTable<object, object>();
         static void OnTip(object sender, ToolTipEventArgs e) {
             var fe = sender as FrameworkElement; if (fe == null || !Active) return;
             var s = fe.ToolTip as string; if (s != null) { var t = T(s); if (t != s) fe.ToolTip = t; }
         }
-        static void OnLoaded(object sender, RoutedEventArgs e) {
-            if (!Active) return;
-            try { Apply(sender as FrameworkElement); } catch { }
+        static void OnWinLoaded(object sender, RoutedEventArgs e) {
+            var w = sender as Window; if (w == null || !Active) return;
+            object o; if (done.TryGetValue(w, out o)) return;
+            done.Add(w, true);
+            try { Walk(w); } catch { }
+            var tm = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background, w.Dispatcher) { Interval = TimeSpan.FromMilliseconds(350) };
+            tm.Tick += (s2, e2) => { tm.Stop(); try { if (Active) Walk(w); } catch { } };
+            w.LayoutUpdated += (s3, e3) => { if (!tm.IsEnabled) tm.Start(); };
+            w.Closed += (s4, e4) => tm.Stop();
+        }
+        public static void Walk(DependencyObject root) {
+            if (root == null || !Active) return;
+            var st = new Stack<DependencyObject>(); st.Push(root);
+            while (st.Count > 0) {
+                var d = st.Pop();
+                var fe = d as FrameworkElement;
+                if (fe != null) {
+                    if (fe.Uid == "notr") continue;
+                    object o;
+                    if (!done.TryGetValue(fe, out o)) { done.Add(fe, true); try { Apply(fe); } catch { } }
+                }
+                int n = 0;
+                if (d is System.Windows.Media.Visual || d is System.Windows.Media.Media3D.Visual3D) { try { n = System.Windows.Media.VisualTreeHelper.GetChildrenCount(d); } catch { n = 0; } }
+                for (int i = 0; i < n; i++) st.Push(System.Windows.Media.VisualTreeHelper.GetChild(d, i));
+            }
         }
         public static void Apply(FrameworkElement fe) {
             if (fe == null || fe.Uid == "notr") return;
