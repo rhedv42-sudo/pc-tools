@@ -1,10 +1,12 @@
 # Prüft den Übersetzungskern unter Windows PowerShell 5.1 (läuft in GitHub Actions auf windows-latest)
 $ErrorActionPreference = 'Stop'
+$script:okList = New-Object System.Collections.ArrayList
+trap { Write-Host ("::error::Ausnahme: {0} (Zeile {1}: {2})" -f $_.Exception.Message, $_.InvocationInfo.ScriptLineNumber, $_.InvocationInfo.Line.Trim()); exit 1 }
 $root = Split-Path -Parent $PSScriptRoot
 $src = [IO.File]::ReadAllText((Join-Path $root 'PCPflege.ps1'), [Text.Encoding]::UTF8)
 $t = $null; $e = $null
 $ast = [Management.Automation.Language.Parser]::ParseInput($src, [ref]$t, [ref]$e)
-"Parser-Fehler (PS 5.1): $($e.Count)"; $e | Select-Object -First 10 | ForEach-Object { "  L$($_.Extent.StartLineNumber): $($_.Message)" }
+$e | Select-Object -First 10 | ForEach-Object { Write-Host ("::error::PS 5.1 Parser L{0}: {1}" -f $_.Extent.StartLineNumber, $_.Message) }
 if ($e.Count) { throw 'PCPflege.ps1 hat Syntaxfehler unter PowerShell 5.1' }
 $a = $ast.FindAll({ $args[0] -is [Management.Automation.Language.AssignmentStatementAst] -and $args[0].Left.Extent.Text -eq '$I18nCs' }, $true) | Select-Object -First 1
 $cs = $a.Right.Expression.Value
@@ -16,7 +18,7 @@ $d['Fehler beim Start'] = 'Error at startup'; $d['Status'] = 'State'; $d['Nur me
 $d['Spalte A'] = 'Column A'; $d['Hinweis zum Knopf'] = 'Button hint'; $d['Erledigt'] = 'Done'
 [PcTools.I18n]::Load('en-US', $d); [PcTools.I18n]::Install()
 $fail = 0
-function Check($got, $want, $what) { if ($got -ceq $want) { "OK   $what" } else { "FAIL $what -> '$got' (erwartet '$want')"; $script:fail++ } }
+function Check($got, $want, $what) { if ($got -ceq $want) { [void]$script:okList.Add($what) } else { Write-Host ("::error::FAIL {0} -> '{1}' (erwartet '{2}')" -f $what, $got, $want); $script:fail++ } }
 Check ([PcTools.I18n]::T('Speichern')) 'Save' 'exakt'
 Check ([PcTools.I18n]::T('  Speichern ')) '  Save ' 'Leerzeichen'
 Check ([PcTools.I18n]::T('13 Programme gefunden, 4 davon vorausgewählt.')) '13 programs found, 4 of them preselected.' 'Platzhalter'
@@ -63,9 +65,9 @@ foreach ($f in @(Get-ChildItem (Join-Path $root 'lang') -Filter '*.json' -ErrorA
     $js = New-Object Web.Script.Serialization.JavaScriptSerializer; $js.MaxJsonLength = [int]::MaxValue
     $o = $js.DeserializeObject([IO.File]::ReadAllText($f.FullName, [Text.Encoding]::UTF8))
     $n = $o['strings'].Count; $bad = 0
-    foreach ($k in $o['strings'].Keys) { $v = [string]$o['strings'][$k]; $pk = @([regex]::Matches($k, '\{\d+') | ForEach-Object { $_.Value } | Sort-Object -Unique); $pv = @([regex]::Matches($v, '\{\d+') | ForEach-Object { $_.Value } | Sort-Object -Unique); if (($pk -join ',') -ne ($pv -join ',')) { $bad++; if ($bad -le 5) { "  Platzhalter passen nicht ($($f.Name)): $k  =>  $v" } } }
-    "Sprachdatei $($f.Name): $n Texte, $bad mit abweichenden Platzhaltern"
+    foreach ($k in $o['strings'].Keys) { $v = [string]$o['strings'][$k]; $pk = @([regex]::Matches($k, '\{\d+') | ForEach-Object { $_.Value } | Sort-Object -Unique); $pv = @([regex]::Matches($v, '\{\d+') | ForEach-Object { $_.Value } | Sort-Object -Unique); if (($pk -join ',') -ne ($pv -join ',')) { $bad++; if ($bad -le 5) { Write-Host ("::warning::Platzhalter ({0}): {1} => {2}" -f $f.Name, $k, $v) } } }
+    Write-Host ("::notice::Sprachdatei {0}: {1} Texte, {2} mit abweichenden Platzhaltern" -f $f.Name, $n, $bad)
     if ($bad) { $fail++ }
 }
-if ($fail) { throw "$fail Prüfung(en) fehlgeschlagen" }
-'Alle Prüfungen bestanden.'
+Write-Host ("::notice::Bestanden: " + ($script:okList -join ', '))
+if ($fail) { Write-Host "::error::$fail Prüfung(en) fehlgeschlagen"; exit 1 }
