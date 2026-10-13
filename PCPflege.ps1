@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Auto, [switch]$Run, [string]$Parts = '', [switch]$Analyze, [switch]$CheckOnly, [string]$RunId = '', [string]$AppsFile = '', [string]$WingetFile = '', [string]$DirectFile = '', [string]$Monitor = '', [switch]$DeskArrange, [string]$Topology = '', [int]$Delay = 0, [switch]$Silent, [switch]$Install, [string]$JobFile = '', [switch]$Backup, [switch]$FleetPoll, [string]$FirstLogon = '', [switch]$NetDiag, [switch]$TbSync, [switch]$WinRepair, [switch]$NetDeep, [string]$DeepOpts = '', [switch]$FullBackup, [switch]$FullRepair, [switch]$NetDoc, [switch]$Sign, [string]$SignOpts = '', [string]$ChocoFile = '')
 
-$AppVersion = '13.9.2'
+$AppVersion = '14.0'
 $DefaultUpdateSource = 'github:rhedv42-sudo/pc-tools@stable'
 # Portabel (USB-Stick): Datei portable.txt neben dem Skript -> Einstellungen/Protokolle im Ordner Daten auf dem Stick
 $Script:IsPortable = [bool]($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'portable.txt')))
@@ -21688,6 +21688,7 @@ $pageSecurity = New-Page 'Sicherheit' 'Alle Schutzfunktionen dieses PCs auf eine
 
 # ---------------------------------------------------------------- Handbuch (wird mit jeder Version gepflegt)
 $ManualNews = @(
+    'Version 14.0: PC-Tools spricht jetzt 12 Sprachen - Deutsch, English, Español, Français, Italiano, Português (Brasil), Polski, Türkçe, Русский, 简体中文, 日本語 und 한국어. Die Sprache wählst du beim ersten Start oder jederzeit unter Einstellungen > Stabilität > Sprache; auch der KI-Assistent antwortet in deiner Sprache. Die Übersetzungen sind maschinell (KI) erstellt - Fehler bitte über "Übersetzungsfehler melden" mitteilen. Dazu: PC-Tools.exe, Installationsprogramm und die Linux-Ausgabe.',
     'Version 13.9.2: Das Symbol in der Taskleiste ist repariert (eigenes PC-Tools-Symbol in allen Größen, auch beim Anheften). Neu: PC-Tools.exe als Starter und ein Installationsprogramm (PC-Tools-Setup.exe) - und die ersten Sprachen: English, Español, Русский und 简体中文 (Einstellungen > Stabilität > Sprache). Weitere Sprachen folgen mit Version 14.',
     'Version 13.9.1: "Nicht genutzte Programme" entfernt jetzt auch Programme ohne stillen Deinstallationsweg: erst still (MSI, Inno, NSIS, electron-builder, WiX, Squirrel), dann über winget, dann über das Deinstallationsprogramm des Herstellers, bei portablen Programmen ohne Deinstaller werden Ordner (Papierkorb) und Eintrag (gesichert) entfernt. Vorbereitung für die Mehrsprachigkeit von Version 14.',
     'Version 13.9: Der KI-Assistent arbeitet jetzt selbstständig: Kostenlose KI mit einem Klick (oder automatisch beim ersten Senden), automatische Diagnose nach jedem Pflegelauf in einfachen Worten, wöchentliche Zusammenfassung "Was ist diese Woche auf deinem PC passiert?", Bluescreens (Minidumps mit Stoppcode) und Ereignisprotokoll erklären, Netzwerk-Bericht per KI zusammenfassen mit Maßnahmenliste nach Wichtigkeit, neue Lese-Werkzeuge (Autostart, Treiber, Updates - immer erst nach Bestätigung), Spracheingabe und Vorlesen, Gespräch je PC speichern und Gedächtnis für frühere Probleme.',
