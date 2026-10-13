@@ -3143,12 +3143,95 @@ function Get-BackupCred {
     try { Add-Type -AssemblyName System.Security; [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes($BackupCredFile), $null, [Security.Cryptography.DataProtectionScope]::LocalMachine)) | ConvertFrom-Json } catch { $null }
 }
 # NAS-Freigabe mit gespeichertem Zugang verbinden (nötig, wenn die Sicherung als SYSTEM im Zeitplan läuft)
+# ---- Stabilität (V14): Netzwerkfreigabe kurz anpingen statt Test-Path minutenlang hängen zu lassen; Dienste mit Zeitlimit steuern
+function Test-UncReachable([string]$Path, [int]$Ms = 1500) {
+    if ($Path -notmatch '^\\\\([^\\]+)\\') { return $true }
+    $h = $Matches[1]; $c = New-Object Net.Sockets.TcpClient
+    try { $t = $c.ConnectAsync($h, 445); return [bool]($t.Wait($Ms) -and $c.Connected) } catch { return $false } finally { try { $c.Close() } catch { } }
+}
+function Set-ServiceSafe([string]$Name, [string]$Action, [int]$Sec = 30) {
+    try { Add-Type -AssemblyName System.ServiceProcess -ErrorAction SilentlyContinue } catch { }
+    $s = New-Object System.ServiceProcess.ServiceController($Name)
+    $s.Refresh(); $deps = @()
+    if ($Action -in 'Stop', 'Restart' -and $s.Status -ne 'Stopped') {
+        $deps = @($s.DependentServices | Where-Object { $_.Status -eq 'Running' })
+        foreach ($d in $deps) { try { $d.Stop(); $d.WaitForStatus('Stopped', [TimeSpan]::FromSeconds($Sec)) } catch { } }
+        if (-not $s.CanStop) { throw ('Dienst {0} lässt sich nicht beenden.' -f $Name) }
+        $s.Stop()
+        try { $s.WaitForStatus('Stopped', [TimeSpan]::FromSeconds($Sec)) } catch { throw ('Dienst {0} hat nicht innerhalb von {1} Sekunden angehalten.' -f $Name, $Sec) }
+    }
+    if ($Action -in 'Start', 'Restart') {
+        $s.Refresh()
+        if ($s.Status -ne 'Running') {
+            if ($s.Status -ne 'StartPending') { $s.Start() }
+            try { $s.WaitForStatus('Running', [TimeSpan]::FromSeconds($Sec)) } catch { throw ('Dienst {0} ist nicht innerhalb von {1} Sekunden gestartet.' -f $Name, $Sec) }
+        }
+        foreach ($d in $deps) { try { $d.Refresh(); if ($d.Status -ne 'Running') { $d.Start(); $d.WaitForStatus('Running', [TimeSpan]::FromSeconds(15)) } } catch { } }
+    }
+}
+# V14: Start-/Stop-/Restart-Service im ganzen Programm mit Zeitlimit (die Windows-Befehle warten bei hängenden Diensten ewig).
+# Gleiche Aufrufform wie die Original-Befehle; Fehler/Zeitüberschreitung als normaler Fehler (-ErrorAction wirkt wie gewohnt).
+function Start-Service {
+    [CmdletBinding()] param([Parameter(Mandatory = $true, Position = 0, ValueFromPipelineByPropertyName = $true)][Alias('ServiceName')][string[]]$Name, [switch]$PassThru, [int]$TimeoutSec = 45)
+    process { foreach ($n in $Name) { try { Set-ServiceSafe $n 'Start' $TimeoutSec } catch { $PSCmdlet.WriteError((New-Object Management.Automation.ErrorRecord($_.Exception, 'PcToolsStartService', 'OperationTimeout', $n))) } } }
+}
+function Stop-Service {
+    [CmdletBinding()] param([Parameter(Mandatory = $true, Position = 0, ValueFromPipelineByPropertyName = $true)][Alias('ServiceName')][string[]]$Name, [switch]$Force, [switch]$NoWait, [switch]$PassThru, [int]$TimeoutSec = 45)
+    process {
+        foreach ($n in $Name) {
+            try { if ($NoWait) { $sc = New-Object System.ServiceProcess.ServiceController($n); if ($sc.Status -ne 'Stopped' -and $sc.CanStop) { $sc.Stop() } } else { Set-ServiceSafe $n 'Stop' $TimeoutSec } }
+            catch { $PSCmdlet.WriteError((New-Object Management.Automation.ErrorRecord($_.Exception, 'PcToolsStopService', 'OperationTimeout', $n))) }
+        }
+    }
+}
+function Restart-Service {
+    [CmdletBinding()] param([Parameter(Mandatory = $true, Position = 0, ValueFromPipelineByPropertyName = $true)][Alias('ServiceName')][string[]]$Name, [switch]$Force, [switch]$PassThru, [int]$TimeoutSec = 45)
+    process { foreach ($n in $Name) { try { Set-ServiceSafe $n 'Restart' $TimeoutSec } catch { $PSCmdlet.WriteError((New-Object Management.Automation.ErrorRecord($_.Exception, 'PcToolsRestartService', 'OperationTimeout', $n))) } } }
+}
+# V14: Wiederherstellungspunkt dauert 15 s bis mehrere Minuten - im Fenster-Thread ohne Einfrieren, sonst wie gewohnt
+function Checkpoint-Computer {
+    [CmdletBinding()] param([Parameter(Position = 0)][string]$Description = 'PC-Tools', [string]$RestorePointType = 'MODIFY_SETTINGS')
+    $onUi = $false; try { $onUi = [bool]($window -and [Windows.Threading.Dispatcher]::FromThread([Threading.Thread]::CurrentThread)) } catch { }
+    if (-not $onUi) { Microsoft.PowerShell.Management\Checkpoint-Computer -Description $Description -RestorePointType $RestorePointType -ErrorAction Stop; return }
+    $null = Invoke-UiWait { param($d, $t) Microsoft.PowerShell.Management\Checkpoint-Computer -Description $d -RestorePointType $t -ErrorAction Stop; 'ok' } @($Description, $RestorePointType) @() 900 'Wiederherstellungspunkt wird erstellt ... (kann einige Minuten dauern)'
+}
+# V14: Aufgabe in eigenem Thread ausführen und dabei das Fenster weiter zeichnen lassen (kein "Keine Rückmeldung");
+# für kurze, aber blockierende Aufrufe (Wiederherstellungspunkt, Statusabfragen), wenn ein Umbau auf Invoke-Bg zu groß wäre.
+function Invoke-UiDoEvents {
+    try { $f = New-Object Windows.Threading.DispatcherFrame; [void][Windows.Threading.Dispatcher]::CurrentDispatcher.BeginInvoke([Windows.Threading.DispatcherPriority]::Background, [Windows.Threading.DispatcherOperationCallback] { param($x) $x.Continue = $false; $null }, $f); [Windows.Threading.Dispatcher]::PushFrame($f) } catch { }
+}
+function Invoke-UiWait([scriptblock]$Script, [object[]]$Arguments = @(), [string[]]$Functions = @(), [int]$TimeoutSec = 600, [string]$Text = '') {
+    $ps = [powershell]::Create()
+    try { $Functions = @(@($Functions) + @(Get-BgFnClosure $Functions) | Where-Object { $_ } | Select-Object -Unique) } catch { }
+    try { Set-BgCommonVars $ps } catch { }
+    $pre = ($Functions | ForEach-Object { "function $_ {`n" + (Get-Item "function:$_").ScriptBlock.ToString() + "`n}" }) -join "`n"
+    if ($pre) { [void]$ps.AddScript($pre); [void]$ps.AddStatement() }
+    [void]$ps.AddScript($Script.ToString()); foreach ($a in $Arguments) { [void]$ps.AddArgument($a) }
+    $h = $ps.BeginInvoke()
+    $ct = $null; $en = $true
+    try { if ($Text -and $ui -and $ui.StatusText) { $ui.StatusText.Text = $Text } } catch { }
+    try { if ($window) { $ct = $window.Content; if ($ct) { $en = $ct.IsEnabled; $ct.IsEnabled = $false }; $window.Cursor = 'Wait' } } catch { }
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        while (-not $h.IsCompleted) {
+            Invoke-UiDoEvents; Start-Sleep -Milliseconds 40
+            if ($sw.Elapsed.TotalSeconds -gt $TimeoutSec) { try { $ps.BeginStop($null, $null) | Out-Null } catch { }; throw ('Zeitlimit von {0} Sekunden überschritten.' -f $TimeoutSec) }
+        }
+        $r = $ps.EndInvoke($h)
+        if ($ps.Streams.Error.Count -and -not $r.Count) { throw $ps.Streams.Error[0].Exception }
+        return $r
+    } finally {
+        try { if ($ct) { $ct.IsEnabled = $en }; if ($window) { $window.Cursor = $null } } catch { }
+        if ($h.IsCompleted) { $ps.Dispose() }
+    }
+}
 function Connect-BackupTarget([string]$Path) {
     if ($Path -notmatch '^(\\\\[^\\]+\\[^\\]+)') { return }
     $share = $Matches[1]
+    if (-not (Test-UncReachable $share)) { return }   # NAS aus/nicht erreichbar: nicht minutenlang warten
     if (Test-Path -LiteralPath $share -ErrorAction SilentlyContinue) { return }
     $c = Get-BackupCred
-    if ($c -and $c.User) { $null = & net.exe use $share $c.Pwd ('/user:{0}' -f $c.User) /persistent:no 2>&1 }
+    if ($c -and $c.User -and $c.Pwd) { $null = Invoke-NdCmd (Join-Path $env:windir 'System32\net.exe') ('use "{0}" "{1}" /user:"{2}" /persistent:no' -f $share, $c.Pwd, $c.User) 20 }
 }
 function Get-RoboArgs($B, [string]$Mode) {
     $a = @(); if ($Mode -like 'Spiegeln*') { $a += '/MIR' } else { $a += '/E' }
@@ -5125,9 +5208,12 @@ function Add-NetDrive([string]$Letter, [string]$Path, [string]$User, [string]$Pw
     $k = 'HKCU:\Network\' + $Letter
     Set-PReg $k 'RemotePath' $Path 'String'; Set-PReg $k 'UserName' $(if ($User) { $User } else { '' }) 'String'; Set-PReg $k 'ProviderName' 'Microsoft Windows Network' 'String'
     Set-PReg $k 'ProviderType' 0x20000; Set-PReg $k 'ConnectionType' 1; Set-PReg $k 'DeferFlags' 4
-    $a = @('use', ($Letter + ':'), $Path, '/persistent:yes'); if ($User) { $a += @($(if ($Pwd) { $Pwd } else { '*' }), ('/user:' + $User)) }
-    $o = (& net.exe @a 2>&1) -join ' '
-    return $o
+    # nie "*" übergeben: net.exe würde dann unsichtbar auf eine Kennworteingabe warten (Fenster hängt)
+    if ($Path -match '^\\\\' -and -not (Test-UncReachable $Path 2500)) { return ('Server von {0} nicht erreichbar - Laufwerk ist eingetragen und verbindet sich, sobald der Server da ist.' -f $Path) }
+    $al = 'use {0}: "{1}" /persistent:yes' -f $Letter, $Path
+    if ($User -and $Pwd) { $al += (' "{0}" /user:"{1}"' -f $Pwd, $User) }
+    $o = Invoke-NdCmd (Join-Path $env:windir 'System32\net.exe') $al 30
+    return (($o -split "`r?`n" | Where-Object { $_.Trim() }) -join ' ')
 }
 function Add-NetPrinter([string]$Ip, [string]$Name, [string]$Driver) {
     $port = 'IP_' + $Ip
@@ -5780,9 +5866,10 @@ function Invoke-WuSelected([string[]]$Ids) {
 function Invoke-NdCmd([string]$Exe, [string]$ArgLine = '', [int]$Sec = 60) {
     $psi = New-Object Diagnostics.ProcessStartInfo
     $psi.FileName = $Exe; $psi.Arguments = $ArgLine; $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
-    $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+    $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.RedirectStandardInput = $true
     try { $enc = [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage); $psi.StandardOutputEncoding = $enc; $psi.StandardErrorEncoding = $enc } catch { }
     try { $p = [Diagnostics.Process]::Start($psi) } catch { return ('(konnte {0} nicht starten: {1})' -f $Exe, $_.Exception.Message) }
+    try { $p.StandardInput.Close() } catch { }   # Programme, die eine Eingabe erwarten (z.B. net use ohne Kennwort), bekommen sofort "Ende" statt ewig zu warten
     $o = $p.StandardOutput.ReadToEndAsync(); $e = $p.StandardError.ReadToEndAsync()
     if (-not $p.WaitForExit($Sec * 1000)) { try { $p.Kill() } catch { }; return ('{0}{1}(nach {2} Sekunden abgebrochen)' -f $o.Result, "`r`n", $Sec) }
     $p.WaitForExit()
@@ -19874,7 +19961,7 @@ function Set-SplashStatus([string]$Text) { try { if ($Script:Splash) { $Script:S
 function Close-PflegeSplash {
     if (-not $Script:Splash) { return }
     try { $Script:Splash.Sync.Close = $true; Start-Sleep -Milliseconds 120 } catch { }
-    try { $Script:Splash.PS.EndInvoke($Script:Splash.Handle) } catch { }
+    try { if ($Script:Splash.Handle.AsyncWaitHandle.WaitOne(3000)) { $Script:Splash.PS.EndInvoke($Script:Splash.Handle) } else { $Script:Splash.PS.Stop() } } catch { }
     try { $Script:Splash.PS.Dispose() } catch { }
     try { $Script:Splash.RS.Close() } catch { }
     $Script:Splash = $null
@@ -25211,8 +25298,30 @@ Import-NativeHelpers
 #  Hintergrundaufgaben für die Oberfläche (Oberfläche bleibt bedienbar)
 # =====================================================================
 $script:BgJobs = New-Object System.Collections.ArrayList
+# V14: Hintergrund-Aufgaben bekommen automatisch alle Hilfsfunktionen mit, die die genannten Funktionen aufrufen
+# (vorher fehlte leicht eine in der Liste -> Abbruch im Hintergrund)
+$script:BgFnDeps = @{}; $script:BgFnAll = $null
+function Get-BgFnClosure([string[]]$Roots) {
+    if (-not $script:BgFnAll) { $script:BgFnAll = @{}; foreach ($f in @(Get-ChildItem function:)) { try { if ($f.ScriptBlock.File -and $f.ScriptBlock.File -eq $PSCommandPath) { $script:BgFnAll[$f.Name] = $f } } catch { } } }
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase); $q = [System.Collections.Generic.Queue[string]]::new()
+    foreach ($r in @($Roots)) { if ($r) { $q.Enqueue([string]$r) } }
+    while ($q.Count) {
+        $n = $q.Dequeue(); if (-not $seen.Add($n)) { continue }; if (-not $script:BgFnAll.ContainsKey($n)) { continue }
+        if (-not $script:BgFnDeps.ContainsKey($n)) { $script:BgFnDeps[$n] = @([regex]::Matches($script:BgFnAll[$n].ScriptBlock.ToString(), '(?<![\w$\-])[A-Z][A-Za-z0-9]*-[A-Za-z0-9]+') | ForEach-Object { $_.Value } | Where-Object { $script:BgFnAll.ContainsKey($_) } | Select-Object -Unique) }
+        foreach ($d in $script:BgFnDeps[$n]) { if (-not $seen.Contains($d)) { $q.Enqueue($d) } }
+    }
+    return @($seen | Where-Object { $script:BgFnAll.ContainsKey($_) })
+}
+# V14: Grundeinstellungen, die viele Funktionen voraussetzen, auch im Hintergrund-Thread bereitstellen
+function Set-BgCommonVars($Ps) {
+    foreach ($n in 'DataDir', 'ConfigFile', 'ConfigVersion', 'DefaultUpdateSource', 'AppVersion', 'CcRegBackupRoot', 'NtOui', 'NdocPorts', 'NdocPortNames', 'NdocExtRisk', 'NdocEnterprise', 'NdocInfraRules', 'UnusedProtect', 'NtTlsCode') {
+        try { $v = Get-Variable -Name $n -Scope Script -ErrorAction Stop; $Ps.Runspace.SessionStateProxy.SetVariable($n, $v.Value) } catch { }
+    }
+}
 function Invoke-Bg([scriptblock]$Script, [object[]]$Arguments = @(), [scriptblock]$Done, [string[]]$Functions = @()) {
     $ps = [powershell]::Create()
+    try { $Functions = @(@($Functions) + @(Get-BgFnClosure $Functions) | Where-Object { $_ } | Select-Object -Unique) } catch { }
+    Set-BgCommonVars $ps
     $pre = ($Functions | ForEach-Object { "function $_ {`n" + (Get-Item "function:$_").ScriptBlock.ToString() + "`n}" }) -join "`n"
     if ($pre) { [void]$ps.AddScript($pre); [void]$ps.AddStatement() }
     [void]$ps.AddScript($Script.ToString())
@@ -25567,9 +25676,9 @@ function Invoke-SvcAction([string]$Act) {
     $window.Cursor = 'Wait'
     try {
         switch ($Act) {
-            'Start'   { Start-Service -Name $s.Name -ErrorAction Stop }
-            'Stop'    { if (-not (Confirm-Ui ('Dienst "{0}" beenden?' -f $s.DisplayName))) { return }; Stop-Service -Name $s.Name -Force -ErrorAction Stop }
-            'Restart' { Restart-Service -Name $s.Name -Force -ErrorAction Stop }
+            'Start'   { Set-ServiceSafe $s.Name 'Start' 30 }
+            'Stop'    { if (-not (Confirm-Ui ('Dienst "{0}" beenden?' -f $s.DisplayName))) { return }; Set-ServiceSafe $s.Name 'Stop' 30 }
+            'Restart' { Set-ServiceSafe $s.Name 'Restart' 30 }
             default   {
                 if ($Act -eq 'Disabled' -and $s.IsMs -and -not (Confirm-Ui ('"{0}" ist ein Windows-Dienst. Deaktivieren kann Funktionen von Windows stören. Trotzdem deaktivieren?' -f $s.DisplayName) 'Warning')) { return }
                 $mode = @{ Automatic = 'auto'; Manual = 'demand'; Disabled = 'disabled' }[$Act]
@@ -27444,8 +27553,8 @@ function Update-Ampel {
         $ui.AmpTitle.Text = switch ($state) { 'Red' { 'Dringend: {0} Punkt(e) sofort erledigen' -f $red.Count } 'Yellow' { 'Gut - {0} Punkt(e) bald erledigen' -f $yel.Count } default { 'Alles in Ordnung - dem PC geht es gut' } }
         $ui.AmpSub.Text = switch ($state) { 'Red' { 'Rot heißt: Sicherheit oder Daten sind in Gefahr.' } 'Yellow' { 'Gelb heißt: nichts Kritisches, aber bitte zeitnah.' } default { 'Keine Probleme gefunden. Weiter so - der Zeitplan hält alles aktuell.' } }
         $script:AmpItems = $items
-        try { Write-FleetStatus $items $(if ($script:SecState) { [int]$script:SecState.Score } else { -1 }) } catch { }
-        try { Add-HealthHistory } catch { }
+        # V14: Status an "Meine PCs" (NAS) und Verlauf im Hintergrund - ein ausgeschaltetes NAS ließ das Fenster sonst hängen
+        Invoke-Bg -Script { param($it, $sc) try { Write-FleetStatus $it $sc } catch { }; try { Add-HealthHistory } catch { } } -Arguments @(@($items), $(if ($script:SecState) { [int]$script:SecState.Score } else { -1 })) -Functions @('Write-FleetStatus', 'Add-HealthHistory') -Done { param($r, $e) }
         $ui.AmpList.Children.Clear()
         foreach ($it in ($items | Sort-Object @{ e = { if ($_.Level -eq 'Red') { 0 } else { 1 } } })) {
             $g = New-Object Windows.Controls.Grid; $g.Margin = '0,4'
@@ -28897,7 +29006,16 @@ function Invoke-UpdateCheck([switch]$Quiet) {
     $src = $ui.Settings_UpdateSource.Text.Trim()
     $ui.InfoAppVer.Text = 'Version {0}' -f $AppVersion
     if (-not $src) { $ui.UpdStatus.Text = ('Installiert: {0} - keine Update-Quelle eingetragen' -f $AppVersion); $ui.BtnUpdInstall.IsEnabled = $false; return }
-    $m = Get-UpdateManifest $src
+    # V14: Abruf im Hintergrund - langsames/fehlendes Netz lässt das Fenster nicht mehr hängen
+    $script:UpdQuiet = [bool]$Quiet
+    $ui.UpdStatus.Text = 'Suche nach neuer Version ...'
+    Invoke-Bg -Script { param($s) Get-UpdateManifest $s } -Arguments @($src) -Functions @('Get-UpdateManifest') -Done {
+        param($r, $e)
+        $m = @($r | Where-Object { $_ -and $_.PSObject.Properties['Version'] })[0]
+        try { Complete-UpdateCheck $m $script:UpdQuiet } catch { $ui.UpdStatus.Text = 'Update-Prüfung: ' + $_.Exception.Message }
+    }
+}
+function Complete-UpdateCheck($m, [bool]$Quiet) {
     $script:UpdManifest = $m
     if (-not $m) { $ui.UpdStatus.Text = ('Installiert: {0} - Update-Quelle nicht erreichbar oder leer' -f $AppVersion); $ui.BtnUpdInstall.IsEnabled = $false; return }
     if (Test-NewerVersion $m.Version $AppVersion) {
@@ -31821,14 +31939,14 @@ $ui.BtnPrnPackage.Add_Click({
                 $sig = Get-AuthenticodeSignature -FilePath $f
                 if ($sig.Status -ne 'Valid' -and -not (Confirm-Ui ('Das Paket ist nicht gültig signiert ({0}). Trotzdem ausführen?' -f $sig.Status) 'Warning')) { return }
                 [Windows.MessageBox]::Show(('Der Installer des Herstellers ({0}) startet jetzt. Bei der Frage nach der Verbindung "Netzwerk" bzw. "USB" wählen - das Gerät wird dabei meist automatisch gefunden. Danach hier "Neu einlesen".' -f ($sig.SignerCertificate.Subject -replace '^CN=([^,]+).*$', '$1')), 'PC-Tools', 'OK', 'Information') | Out-Null
-                if ($f -match '\.msi$') { Start-Process msiexec.exe -ArgumentList ('/i "{0}"' -f $f) -Wait } else { Start-Process -FilePath $f -Wait }
+                $null = Invoke-UiWait { param($f) $p = if ($f -match '\.msi$') { Start-Process msiexec.exe -ArgumentList ('/i "{0}"' -f $f) -PassThru } else { Start-Process -FilePath $f -PassThru }; [void]$p.WaitForExit(3600000); 'ok' } @($f) @() 3700 'Der Hersteller-Installer läuft ... (PC-Tools wartet, bis er fertig ist)'
             }
-            '\.zip$' { $x = Join-Path $env:TEMP ('PCPflege-Drucker-' + (Get-Random)); Expand-Archive -LiteralPath $f -DestinationPath $x -Force; $o = (& pnputil.exe /add-driver (Join-Path $x '*.inf') /subdirs /install 2>&1) -join "`n"; Remove-Item $x -Recurse -Force -ErrorAction SilentlyContinue; $ui.StatusText.Text = 'pnputil: ' + (($o -split "`n") | Select-Object -Last 3) -join ' ' }
-            '\.inf$' { $o = (& pnputil.exe /add-driver $f /install 2>&1) -join "`n"; $ui.StatusText.Text = 'pnputil: ' + (($o -split "`n") | Select-Object -Last 3) -join ' ' }
+            '\.zip$' { $o = [string]@(Invoke-UiWait { param($f) $x = Join-Path $env:TEMP ('PCPflege-Drucker-' + (Get-Random)); Expand-Archive -LiteralPath $f -DestinationPath $x -Force; $o = (& pnputil.exe /add-driver (Join-Path $x '*.inf') /subdirs /install 2>&1) -join "`n"; Remove-Item $x -Recurse -Force -ErrorAction SilentlyContinue; $o } @($f) @() 600 'Treiber wird installiert ...')[-1]; $ui.StatusText.Text = 'pnputil: ' + (($o -split "`n") | Select-Object -Last 3) -join ' ' }
+            '\.inf$' { $o = [string]@(Invoke-UiWait { param($f) (& pnputil.exe /add-driver $f /install 2>&1) -join "`n" } @($f) @() 600 'Treiber wird installiert ...')[-1]; $ui.StatusText.Text = 'pnputil: ' + (($o -split "`n") | Select-Object -Last 3) -join ' ' }
         }
     } catch { Show-UiError $_.Exception.Message }
     # neu hinzugekommene Druckertreiber aus dem Treiberspeicher registrieren
-    foreach ($n in @(Get-CimInstance Win32_PnPSignedDriver -Filter "DeviceClass='PRINTER'" -ErrorAction SilentlyContinue | ForEach-Object { $_.DeviceName } | Where-Object { $_ } | Sort-Object -Unique)) { if ($before -notcontains $n) { try { Add-PrinterDriver -Name $n -ErrorAction Stop } catch { } } }
+    try { $null = Invoke-UiWait { param($before) foreach ($n in @(Get-CimInstance Win32_PnPSignedDriver -Filter "DeviceClass='PRINTER'" -ErrorAction SilentlyContinue | ForEach-Object { $_.DeviceName } | Where-Object { $_ } | Sort-Object -Unique)) { if ($before -notcontains $n) { try { Add-PrinterDriver -Name $n -ErrorAction Stop } catch { } } }; 'ok' } @(, $before) @() 300 'Neue Druckertreiber werden registriert ...' } catch { }
     Update-Printers
     $new = @(Get-PrinterDriver -ErrorAction SilentlyContinue | ForEach-Object { $_.Name } | Where-Object { $before -notcontains $_ })
     if ($new.Count) { $ui.PrnDriver.Text = $new[0]; [Windows.MessageBox]::Show(('Neue Druckertreiber: ' + ($new -join ', ') + "`n`nDer erste ist unten ausgewählt - jetzt ""Drucker einrichten"", falls der Hersteller-Installer das Gerät nicht schon selbst eingerichtet hat."), 'PC-Tools', 'OK', 'Information') | Out-Null }
@@ -31978,7 +32096,7 @@ function Invoke-NsFix($Row) {
         'Firewall' { Set-NetFirewallProfile -Profile $Row.Arg -Enabled True }
         'Public'   { Set-NetConnectionProfile -InterfaceIndex ([int]$Row.Arg) -NetworkCategory Public }
         'Private'  { Set-NetConnectionProfile -InterfaceIndex ([int]$Row.Arg) -NetworkCategory Private }
-        'Smb1'     { Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force -ErrorAction SilentlyContinue; $null = Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart -ErrorAction SilentlyContinue }
+        'Smb1'     { $null = Invoke-UiWait { Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force -ErrorAction SilentlyContinue; $null = Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart -ErrorAction SilentlyContinue; 'ok' } @() @() 900 'SMB1 wird abgeschaltet ...' }
         'SmbSign'  { Set-SmbServerConfiguration -RequireSecuritySignature $true -Force }
         'Llmnr'    { Set-PReg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' 'EnableMulticast' 0 }
         'Netbios'  { foreach ($a in @(Get-CimInstance Win32_NetworkAdapterConfiguration -Filter 'IPEnabled=TRUE')) { $null = Invoke-CimMethod -InputObject $a -MethodName SetTcpipNetbios -Arguments @{ TcpipNetbiosOptions = [uint32]2 } } }
@@ -32315,7 +32433,7 @@ function Set-UpExclude([string[]]$Ids, [bool]$Add) {
     $cur = [System.Collections.Generic.List[string]]::new(); foreach ($x in (([string]$ui.Update_WingetExclude.Text) -split '[,;\s]+' | Where-Object { $_ })) { $cur.Add($x) }
     foreach ($i in $Ids) { if ($Add -and -not $cur.Contains($i)) { $cur.Add($i) } elseif (-not $Add) { [void]$cur.Remove($i) } }
     $ui.Update_WingetExclude.Text = ($cur -join ', '); $null = Save-All -Quiet
-    if (-not $Add) { $wg = Get-WingetPathX; foreach ($i in $Ids) { if ($wg) { $null = & $wg pin remove --id $i 2>&1 } } }
+    if (-not $Add) { $wg = Get-WingetPathX; if ($wg) { $null = Invoke-UiWait { param($w, $ids) foreach ($i in $ids) { $null = Invoke-NdCmd $w ('pin remove --id "{0}" --accept-source-agreements --disable-interactivity' -f $i) 60 }; 'ok' } @($wg, @($Ids)) @('Invoke-NdCmd') 300 'winget: Ausnahme wird entfernt ...' } }
     foreach ($a in @($script:UpApps)) { if ($Ids -contains $a.Id) { $a.Excluded = $Add; $a.Note = $(if ($Add) { 'ausgenommen' } else { '' }); $a.Hot = $false } }
     $ui.UpAppGrid.Items.Refresh()
 }
@@ -32342,7 +32460,7 @@ $ui.BtnUpWuScan.Add_Click({
 })
 $ui.BtnUpWuSel.Add_Click({ $ids = @($ui.UpWuGrid.SelectedItems | ForEach-Object { $_.Id }); if (-not $ids.Count) { Show-UiError 'Bitte Updates markieren.'; return }; Start-Run -Parts @('WuSelected') -Job @{ UpdateIds = $ids } })
 $ui.BtnUpWuAll.Add_Click({ $ids = @($script:UpWu | Where-Object { $_.Kind -ne 'Funktionsupdate' } | ForEach-Object { $_.Id }); if (-not $ids.Count) { Show-UiError 'Nichts zu installieren (Funktionsupdates bitte gezielt markieren).'; return }; Start-Run -Parts @('WuSelected') -Job @{ UpdateIds = $ids } })
-$ui.BtnUpWuHide.Add_Click({ $ids = @($ui.UpWuGrid.SelectedItems | ForEach-Object { $_.Id }); if (-not $ids.Count) { return }; try { $n = Set-WuUpdateHidden $ids $true; $ui.StatusText.Text = '{0} Update(s) ausgeblendet (wieder einblenden: Seite Update-Steuerung).' -f $n; $ui.BtnUpWuScan.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.Button]::ClickEvent))) } catch { Show-UiError $_.Exception.Message } })
+$ui.BtnUpWuHide.Add_Click({ $ids = @($ui.UpWuGrid.SelectedItems | ForEach-Object { $_.Id }); if (-not $ids.Count) { return }; try { $n = @(Invoke-UiWait { param($i) Set-WuUpdateHidden $i $true } @(, $ids) @('Set-WuUpdateHidden') 600 'Windows Update wird abgefragt ...')[-1]; $ui.StatusText.Text = '{0} Update(s) ausgeblendet (wieder einblenden: Seite Update-Steuerung).' -f $n; $ui.BtnUpWuScan.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.Button]::ClickEvent))) } catch { Show-UiError $_.Exception.Message } })
 $ui.BtnUpHist.Add_Click({
     Invoke-Bg -Script {
         param($dir)
