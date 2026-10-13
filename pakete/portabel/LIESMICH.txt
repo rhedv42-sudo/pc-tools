@@ -1,0 +1,13 @@
+﻿PC-Tools portabel
+
+"PC-Tools starten.cmd"  - die normale Oberfläche (Einstellungen und Protokolle bleiben im Ordner "Daten" auf dem Stick).
+"Netzwerk-Notfall.cmd"   - Netzwerk-Diagnose im Textfenster: keine IPv4-Adresse (169.254), kein Internet, WLAN-Probleme.
+                          Funktioniert ohne Internet. Bericht landet im Ordner "Netzwerk-Diagnose" auf dem Stick.
+"Windows-Reparatur.cmd"  - Windows-Reparatur im Textfenster (DISM, SFC, Windows Update, Netzwerk-Tiefenreparatur, WinRE,
+                          abgesicherter Modus ...) - wenn die Oberfläche nicht mehr startet. Protokolle im Ordner "Daten".
+Ordner "Surface"         - Surface-Treiber-/Firmwarepakete (.msi), in PC-Tools > Microsoft Surface > "Paket vom Stick installieren".
+
+Datei "lite.txt"         - nur in der Lite-Ausgabe: zeigt die wichtigsten Seiten (umschaltbar unter Einstellungen > Stabilität).
+Die .cmd-Dateien fragen nach Administratorrechten.
+"Komplett-Reparatur.cmd" - tiefgreifende Komplett-Reparatur OHNE Rueckfragen (Dienste, DISM/SFC, Windows Update,
+                          Netzwerk, WMI, Update-Blocker, alte angreifbare Treiber) mit Super-Log, am Ende Neustart.

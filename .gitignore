@@ -1,0 +1,10 @@
+# Lizenzierte Fremdsoftware - NIE ins Repository (Anleitung: Zubehoer/Ninite-Pro-einbinden.txt)
+NinitePro.exe
+**/NinitePro.exe
+*.token
+config.json
+Daten/
+**/Daten/
+Logs/
+dist/
+*.zip

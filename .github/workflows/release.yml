@@ -1,0 +1,73 @@
+name: Release (bauen, signieren, veröffentlichen)
+
+# Läuft, wenn ein Tag wie v13.7 gepusht wird.
+on:
+  push:
+    tags: [ 'v*' ]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version prüfen
+        shell: pwsh
+        run: |
+          $ver = '${{ github.ref_name }}'.TrimStart('v')
+          $av = (Select-String -Path PCPflege.ps1 -Pattern "^\`$AppVersion = '([^']+)'").Matches[0].Groups[1].Value
+          if ($av -ne $ver) { throw "Tag $ver passt nicht zu `$AppVersion $av." }
+
+      # ---- Signatur über SignPath (nur wenn eingerichtet: Variable SIGNPATH_ORGANIZATION_ID + Secret SIGNPATH_API_TOKEN)
+      - name: Unsigniertes Skript bereitstellen
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        id: unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned
+          path: PCPflege.ps1
+
+      - name: Signieren (SignPath)
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
+          organization-id: '${{ vars.SIGNPATH_ORGANIZATION_ID }}'
+          project-slug: 'pc-tools'
+          signing-policy-slug: 'release-signing'
+          artifact-configuration-slug: 'ps1'
+          github-artifact-id: '${{ steps.unsigned.outputs.artifact-id }}'
+          wait-for-completion: true
+          output-artifact-directory: 'signed'
+
+      - name: Signierte Fassung übernehmen
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        shell: pwsh
+        run: Copy-Item signed/PCPflege.ps1 PCPflege.ps1 -Force
+
+      - name: Pakete bauen
+        shell: pwsh
+        run: ./build/Build-Packages.ps1 -Out dist
+
+      - name: GitHub Release erstellen
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip
+            dist/version.json
+            PCPflege.ps1
+
+      # ---- Selbstupdate: Zweig "stable" enthält nur veröffentlichte (ggf. signierte) Stände
+      - name: Zweig stable aktualisieren
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          Copy-Item dist/version.json version.json -Force
+          git checkout -B stable
+          git add -f PCPflege.ps1 version.json
+          git commit -m "Release ${{ github.ref_name }}" --allow-empty
+          git push -f origin stable

@@ -1,0 +1,1 @@
+Diese PC-Tools laufen portabel: Einstellungen und Protokolle liegen im Ordner "Daten" auf dem Stick, auf dem PC wird nichts eingerichtet.

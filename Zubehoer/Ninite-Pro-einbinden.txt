@@ -1,0 +1,24 @@
+Ninite Pro mit PC-Tools nutzen (optional)
+=========================================
+
+Ninite Pro ist lizenzierte Fremdsoftware und deshalb NICHT im Download von
+PC-Tools enthalten. PC-Tools aktualisiert Programme auch ohne Ninite Pro -
+kostenlos über winget (in Windows enthalten) und optional Chocolatey.
+
+Wer eine eigene Ninite-Pro-Lizenz hat (https://ninite.com/pro), bindet sie so ein:
+
+1. NinitePro.exe aus dem eigenen Ninite-Pro-Konto herunterladen.
+
+2. Die Datei an EINE dieser Stellen kopieren (PC-Tools sucht in dieser Reihenfolge):
+     a) C:\ProgramData\PCPflege\NinitePro.exe      <- empfohlen (bleibt bei Updates erhalten)
+     b) in denselben Ordner wie PCPflege.ps1        <- z.B. für die portable Version auf dem USB-Stick
+     c) C:\Tools\PCPflege\NinitePro.exe  oder  C:\Tools\NinitePro.exe
+
+   Alternativ: PC-Tools > Einstellungen > "NinitePro.exe (optional)" > Durchsuchen
+   und die Datei an einem beliebigen Ort auswählen, dann "Einstellungen speichern".
+
+3. Fertig. Bei "Programme aktualisieren" bzw. der Ein-Klick-Pflege nutzt PC-Tools
+   Ninite Pro dann automatisch zusätzlich. Im Protokoll steht, ob Ninite Pro gefunden wurde.
+
+Hinweis: Die Datei NinitePro.exe niemals in ein öffentliches Repository hochladen -
+die Lizenz erlaubt keine Weitergabe.

@@ -1,0 +1,19 @@
+{
+  "Version": "13.7",
+  "Date": "2026-10-13 03:30",
+  "Notes": "Neu: 'Nicht genutzte Programme' finden und nach einer Bestätigung still samt Resten entfernen (Übersicht und PC-Reiniger). Ninite Pro ist nicht mehr im Download - Anleitung zum Einbinden der eigenen Lizenz in Zubehoer\\Ninite-Pro-einbinden.txt. Enthält 13.6 (Netzwerk-Infrastruktur) und 13.5.",
+  "Files": [
+    {
+      "Name": "PCPflege.ps1",
+      "Sha256": "D79EF5599223C9AC11B619B8D2FE2C87DBA9732A8FEC4DE972E9CEF3C8AB6799"
+    },
+    {
+      "Name": "PCPflege.ico",
+      "Sha256": "132F65383E90B0AD60718E8DCF9D9E0BF00EED7B791C416FD2A4FC142944DBB7"
+    },
+    {
+      "Name": "PCPflege.cmd",
+      "Sha256": "7FF4D0F8C3AB431465165B118A39105EB6B08E6A3364C8B44E98A0AE2B752697"
+    }
+  ]
+}

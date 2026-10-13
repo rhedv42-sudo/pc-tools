@@ -1,0 +1,5 @@
+PC-Tools 10.0.1
+
+Installation: Ordner entpacken und "PCPflege.cmd" per Doppelklick starten (fragt nach Administratorrechten).
+Beim ersten Start wählst du Lite oder Vollversion (jederzeit änderbar unter Einstellungen > Stabilität).
+PC-Tools kopiert sich nach C:\ProgramData\PCPflege und aktualisiert sich danach selbst.
