@@ -89,7 +89,8 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           Copy-Item dist/version.json version.json -Force
           git checkout -B stable
-          git add -f PCPflege.ps1 version.json lang
+          git add -f PCPflege.ps1 version.json
+          if (Test-Path lang) { git add -f lang }
           git commit -m "Release v${{ steps.ver.outputs.version }}" --allow-empty
           git push -f origin stable
 
