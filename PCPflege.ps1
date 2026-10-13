@@ -1632,6 +1632,311 @@ function Save-PflegeConfig($Cfg) {
 #  SELBST-UPDATE (Update-Quelle: Ordner/Netzwerkfreigabe oder https-Adresse mit version.json)
 # =====================================================================
 $UpdateFiles = 'PCPflege.ps1', 'PCPflege.ico', 'PCPflege.cmd'
+
+# ---------------------------------------------------------------- Sprachen (Version 14)
+# Deutsch ist die Ausgangssprache. Übersetzungen liegen als reine Daten (JSON) in lang\<code>.json - nie als Code.
+# Übersetzt wird erst beim Anzeigen (Texte, Knöpfe, Tabellen, Meldungen); die Programmlogik arbeitet weiter mit den deutschen Texten.
+$LangList = [ordered]@{ 'de-DE' = 'Deutsch'; 'en-US' = 'English'; 'zh-CN' = '简体中文'; 'ru-RU' = 'Русский'; 'es-ES' = 'Español'; 'pt-BR' = 'Português (Brasil)'; 'fr-FR' = 'Français'; 'ja-JP' = '日本語'; 'pl-PL' = 'Polski'; 'ko-KR' = '한국어'; 'tr-TR' = 'Türkçe'; 'it-IT' = 'Italiano' }
+$LangAiName = @{ 'de-DE' = 'Deutsch'; 'en-US' = 'English'; 'zh-CN' = 'Simplified Chinese (简体中文)'; 'ru-RU' = 'Russian'; 'es-ES' = 'Spanish (Spain)'; 'pt-BR' = 'Brazilian Portuguese'; 'fr-FR' = 'French'; 'ja-JP' = 'Japanese'; 'pl-PL' = 'Polish'; 'ko-KR' = 'Korean'; 'tr-TR' = 'Turkish'; 'it-IT' = 'Italian' }
+$script:I18nOn = $false; $script:UiLang = 'de-DE'; $script:LangMeta = $null
+function T([string]$Text) { if ($script:I18nOn -or ('PcTools.I18n' -as [type])) { try { return [PcTools.I18n]::T($Text) } catch { } }; return $Text }
+function Get-LangDirs { $d = @(); if ($PSScriptRoot) { $d += (Join-Path $PSScriptRoot 'lang') }; $d += (Join-Path $DataDir 'lang'); return $d }
+function Get-LangFile([string]$Code) { foreach ($d in (Get-LangDirs)) { $f = Join-Path $d ($Code + '.json'); if (Test-Path -LiteralPath $f) { return $f } }; return '' }
+function Get-UiLang {
+    $f = Join-Path $DataDir 'sprache.txt'
+    try { if (Test-Path -LiteralPath $f) { $c = ([string](Get-Content -LiteralPath $f -Raw -Encoding UTF8)).Trim(); if ($LangList.Contains($c)) { return $c } } } catch { }
+    return 'de-DE'
+}
+function Set-UiLang([string]$Code) { if (-not $LangList.Contains($Code)) { return }; try { New-Item $DataDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null; Set-Content -LiteralPath (Join-Path $DataDir 'sprache.txt') -Value $Code -Encoding ASCII } catch { } }
+# Sprachdatei aus dem Update-Zweig laden (nur Daten, mit Prüfung, dass es gültiges JSON mit "strings" ist)
+function Save-LangFile([string]$Code) {
+    $src = $DefaultUpdateSource; try { $c = Read-PflegeConfig; if ([string]$c.Settings.UpdateSource) { $src = [string]$c.Settings.UpdateSource } } catch { }
+    $gh = Get-GitHubSource $src; if (-not $gh) { $gh = Get-GitHubSource $DefaultUpdateSource }
+    $dir = Join-Path $DataDir 'lang'; New-Item $dir -ItemType Directory -Force | Out-Null
+    $tmp = Join-Path $dir ($Code + '.download'); $dst = Join-Path $dir ($Code + '.json')
+    Invoke-GitHubRaw $gh ('lang/' + $Code + '.json') $tmp
+    Add-Type -AssemblyName System.Web.Extensions
+    $js = New-Object Web.Script.Serialization.JavaScriptSerializer; $js.MaxJsonLength = [int]::MaxValue
+    $o = $js.DeserializeObject([IO.File]::ReadAllText($tmp, [Text.Encoding]::UTF8))
+    if (-not $o -or -not $o.ContainsKey('strings')) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue; throw 'Sprachdatei ungültig.' }
+    Move-Item -LiteralPath $tmp -Destination $dst -Force
+    return $dst
+}
+$I18nCs = @'
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Runtime.CompilerServices;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Documents;
+using System.Windows.Markup;
+using System.ComponentModel;
+
+namespace PcTools {
+    public class TrConv : IValueConverter {
+        public static readonly TrConv I = new TrConv();
+        public object Convert(object v, Type t, object p, CultureInfo c) { var s = v as string; return s == null ? v : I18n.T(s); }
+        public object ConvertBack(object v, Type t, object p, CultureInfo c) { return v; }
+    }
+    public static class I18n {
+        public static string Lang = "de-DE";
+        static Dictionary<string, string> exact = new Dictionary<string, string>(StringComparer.Ordinal);
+        class Pat { public Regex Rx; public string Repl; public string Anchor; public int[] Order; }
+        static List<Pat> pats = new List<Pat>();
+        static Dictionary<string, List<KeyValuePair<string, string>>> frag = new Dictionary<string, List<KeyValuePair<string, string>>>(StringComparer.Ordinal);
+        static Dictionary<string, string> cache = new Dictionary<string, string>(StringComparer.Ordinal);
+        static readonly object lk = new object();
+        static bool installed;
+        [ThreadStatic] static bool busy;
+        static DataTemplate tpl;
+        static ConditionalWeakTable<object, object> hooked = new ConditionalWeakTable<object, object>();
+        static readonly Regex ph = new Regex(@"\{(\d+)(?:[,:][^}]*)?\}", RegexOptions.Compiled);
+        const int FragMin = 8, FragKey = 6;
+
+        public static bool Active { get { return !Lang.StartsWith("de", StringComparison.OrdinalIgnoreCase) && exact.Count > 0; } }
+        public static int Count { get { return exact.Count; } }
+
+        public static void Load(string lang, IDictionary<string, object> strings) {
+            lock (lk) {
+                Lang = lang; exact.Clear(); pats.Clear(); frag.Clear(); cache.Clear();
+                if (strings == null) return;
+                foreach (var kv in strings) {
+                    var tr = kv.Value as string;
+                    if (string.IsNullOrEmpty(kv.Key) || string.IsNullOrEmpty(tr) || tr == kv.Key) continue;
+                    exact[kv.Key] = tr;
+                    if (ph.IsMatch(kv.Key)) AddPattern(kv.Key, tr);
+                    else if (kv.Key.Length >= FragMin) {
+                        string k = kv.Key.Substring(0, FragKey); List<KeyValuePair<string, string>> l;
+                        if (!frag.TryGetValue(k, out l)) { l = new List<KeyValuePair<string, string>>(); frag[k] = l; }
+                        l.Add(new KeyValuePair<string, string>(kv.Key, tr));
+                    }
+                }
+                foreach (var l in frag.Values) l.Sort((a, b) => b.Key.Length.CompareTo(a.Key.Length));
+                pats.Sort((a, b) => b.Anchor.Length.CompareTo(a.Anchor.Length));
+            }
+        }
+        static void AddPattern(string key, string tr) {
+            var sb = new StringBuilder("^"); int last = 0; string anchor = ""; var seen = new HashSet<string>();
+            foreach (Match m in ph.Matches(key)) {
+                string lit = key.Substring(last, m.Index - last);
+                if (lit.Trim().Length > anchor.Trim().Length) anchor = lit;
+                sb.Append(Regex.Escape(lit));
+                string g = "g" + m.Groups[1].Value;
+                if (seen.Contains(g)) sb.Append(@"\k<" + g + ">"); else { sb.Append("(?<" + g + ">.*?)"); seen.Add(g); }
+                last = m.Index + m.Length;
+            }
+            string tail = key.Substring(last); if (tail.Trim().Length > anchor.Trim().Length) anchor = tail;
+            sb.Append(Regex.Escape(tail)).Append("$");
+            if (anchor.Trim().Length < 3) return;
+            try { pats.Add(new Pat { Rx = new Regex(sb.ToString(), RegexOptions.Singleline | RegexOptions.CultureInvariant), Repl = tr, Anchor = anchor }); } catch { }
+        }
+
+        public static string T(string s) {
+            if (s == null || s.Length < 2 || !Active) return s;
+            lock (lk) {
+                string r;
+                if (cache.TryGetValue(s, out r)) return r;
+                r = Core(s, 0);
+                if (cache.Count > 20000) cache.Clear();
+                cache[s] = r;
+                return r;
+            }
+        }
+        static bool HasLetters(string s) { foreach (char c in s) if (char.IsLetter(c)) return true; return false; }
+        static string Core(string s, int depth) {
+            string r;
+            if (exact.TryGetValue(s, out r)) return r;
+            if (!HasLetters(s)) return s;
+            string t = s.Trim();
+            if (t.Length != s.Length && t.Length > 0) {
+                if (exact.TryGetValue(t, out r)) { int a = s.IndexOf(t, StringComparison.Ordinal); return s.Substring(0, a) + r + s.Substring(a + t.Length); }
+            }
+            if (depth < 2 && (s.IndexOf('\n') >= 0)) {
+                var parts = s.Split('\n'); bool ch = false;
+                for (int i = 0; i < parts.Length; i++) { string cr = parts[i].EndsWith("\r") ? "\r" : ""; string p = cr.Length > 0 ? parts[i].Substring(0, parts[i].Length - 1) : parts[i]; string q = p.Length > 0 ? Core(p, depth + 1) : p; if (!ReferenceEquals(q, p) && q != p) { parts[i] = q + cr; ch = true; } }
+                if (ch) return string.Join("\n", parts);
+            }
+            foreach (var p in pats) {
+                if (p.Anchor.Length > 0 && s.IndexOf(p.Anchor, StringComparison.Ordinal) < 0) continue;
+                var m = p.Rx.Match(s);
+                if (!m.Success) continue;
+                return ph.Replace(p.Repl, mm => { var g = m.Groups["g" + mm.Groups[1].Value]; if (!g.Success) return mm.Value; string v = g.Value; string tv; return exact.TryGetValue(v, out tv) ? tv : v; });
+            }
+            // "Bezeichnung: Wert"
+            int ci = s.IndexOf(": ", StringComparison.Ordinal);
+            if (ci > 1 && ci < 60) { string head = s.Substring(0, ci); if (exact.TryGetValue(head, out r)) return r + s.Substring(ci); if (exact.TryGetValue(head + ":", out r)) return r + s.Substring(ci + 1); }
+            if (s.Length >= FragMin) {
+                var sb = new StringBuilder(); int i = 0; bool any = false;
+                while (i < s.Length) {
+                    bool hit = false;
+                    if (i + FragKey <= s.Length && (i == 0 || !char.IsLetter(s[i - 1]))) {
+                        List<KeyValuePair<string, string>> l;
+                        if (frag.TryGetValue(s.Substring(i, FragKey), out l)) {
+                            foreach (var kv in l) {
+                                if (i + kv.Key.Length <= s.Length && string.CompareOrdinal(s, i, kv.Key, 0, kv.Key.Length) == 0 && (i + kv.Key.Length == s.Length || !char.IsLetter(s[i + kv.Key.Length]) || !char.IsLetter(kv.Key[kv.Key.Length - 1]))) {
+                                    sb.Append(kv.Value); i += kv.Key.Length; hit = true; any = true; break;
+                                }
+                            }
+                        }
+                    }
+                    if (!hit) { sb.Append(s[i]); i++; }
+                }
+                if (any) return sb.ToString();
+            }
+            return s;
+        }
+
+        // ---------------------------------------------------------------- WPF
+        public static void Install() {
+            if (installed) return; installed = true;
+            var f = new FrameworkElementFactory(typeof(TextBlock));
+            f.SetBinding(TextBlock.TextProperty, new Binding(".") { Converter = TrConv.I });
+            tpl = new DataTemplate { VisualTree = f }; tpl.Seal();
+            EventManager.RegisterClassHandler(typeof(FrameworkElement), FrameworkElement.LoadedEvent, new RoutedEventHandler(OnLoaded), true);
+            EventManager.RegisterClassHandler(typeof(FrameworkElement), FrameworkElement.ToolTipOpeningEvent, new ToolTipEventHandler(OnTip), true);
+        }
+        static void OnTip(object sender, ToolTipEventArgs e) {
+            var fe = sender as FrameworkElement; if (fe == null || !Active) return;
+            var s = fe.ToolTip as string; if (s != null) { var t = T(s); if (t != s) fe.ToolTip = t; }
+        }
+        static void OnLoaded(object sender, RoutedEventArgs e) {
+            if (!Active) return;
+            try { Apply(sender as FrameworkElement); } catch { }
+        }
+        public static void Apply(FrameworkElement fe) {
+            if (fe == null || fe.Uid == "notr") return;
+            var w = fe as Window;
+            if (w != null) {
+                if (!string.IsNullOrEmpty(w.Title)) w.Title = T(w.Title);
+                try { w.Language = XmlLanguage.GetLanguage(Lang); } catch { }
+                Hook(w, Window.TitleProperty, typeof(Window));
+            }
+            var tb = fe as TextBlock;
+            if (tb != null) { DoTextBlock(tb); Hook(tb, TextBlock.TextProperty, typeof(TextBlock)); return; }
+            var cb = fe as ComboBox;
+            if (cb != null && !cb.IsEditable) {
+                foreach (var it in cb.Items) { var ci = it as ComboBoxItem; if (ci != null && ci.Uid != "notr") DoContent(ci); }
+                if (cb.ItemTemplate == null && cb.ItemsSource == null && cb.Items.Count > 0 && cb.Items[0] is string) cb.ItemTemplate = tpl;
+            }
+            var hc = fe as HeaderedContentControl;
+            if (hc != null && hc.Header is string && hc.HeaderTemplate == null && hc.HeaderTemplateSelector == null) hc.HeaderTemplate = tpl;
+            var hi = fe as HeaderedItemsControl;
+            if (hi != null && hi.Header is string && hi.HeaderTemplate == null && hi.HeaderTemplateSelector == null) hi.HeaderTemplate = tpl;
+            var cc = fe as ContentControl;
+            if (cc != null && !(fe is Window) && !(fe is ToolTip && false)) DoContent(cc);
+            var dg = fe as DataGrid;
+            if (dg != null) DoGrid(dg);
+            var gv = fe as ListView;
+            if (gv != null) { var v = gv.View as GridView; if (v != null) foreach (var c in v.Columns) { if (c.Header is string) c.Header = T((string)c.Header); } }
+        }
+        static void DoContent(ContentControl cc) {
+            if (cc.Content is string && cc.ContentTemplate == null && cc.ContentTemplateSelector == null && !BindingOperations.IsDataBound(cc, ContentControl.ContentProperty)) cc.ContentTemplate = tpl;
+            var s = cc.ToolTip as string; if (s != null) { var t = T(s); if (t != s) cc.ToolTip = t; }
+        }
+        static void DoGrid(DataGrid dg) {
+            foreach (var c in dg.Columns) {
+                if (c.Header is string) { var t = T((string)c.Header); if (t != (string)c.Header) c.Header = t; }
+                var tc = c as DataGridTextColumn;
+                if (tc != null) {
+                    var b = tc.Binding as Binding;
+                    if (b != null && b.Converter == null) {
+                        try { b.Converter = TrConv.I; }
+                        catch { var nb = new Binding { Path = b.Path, Mode = b.Mode, StringFormat = b.StringFormat, Converter = TrConv.I, TargetNullValue = b.TargetNullValue, UpdateSourceTrigger = b.UpdateSourceTrigger }; tc.Binding = nb; }
+                    }
+                }
+            }
+        }
+        static void DoTextBlock(TextBlock tb) {
+            if (busy) return;
+            if (BindingOperations.IsDataBound(tb, TextBlock.TextProperty)) return;
+            busy = true;
+            try {
+                if (tb.Inlines.Count == 1 && tb.Inlines.FirstInline is Run) {
+                    var run = (Run)tb.Inlines.FirstInline;
+                    if (!BindingOperations.IsDataBound(run, Run.TextProperty)) { var t = T(run.Text); if (t != run.Text) run.Text = t; }
+                } else DoInlines(tb.Inlines);
+                var s = tb.ToolTip as string; if (s != null) { var t2 = T(s); if (t2 != s) tb.ToolTip = t2; }
+            } finally { busy = false; }
+        }
+        static void DoInlines(InlineCollection col) {
+            foreach (var il in col) {
+                var r = il as Run;
+                if (r != null) { if (!BindingOperations.IsDataBound(r, Run.TextProperty) && !string.IsNullOrEmpty(r.Text)) { var t = T(r.Text); if (t != r.Text) r.Text = t; } continue; }
+                var sp = il as Span; if (sp != null) DoInlines(sp.Inlines);
+            }
+        }
+        static void Hook(DependencyObject d, DependencyProperty p, Type t) {
+            object o;
+            if (hooked.TryGetValue(d, out o)) return;
+            hooked.Add(d, true);
+            var dpd = DependencyPropertyDescriptor.FromProperty(p, t);
+            if (dpd == null) return;
+            dpd.AddValueChanged(d, (s, e) => {
+                if (busy || !Active) return;
+                try {
+                    var tb = s as TextBlock; if (tb != null) { DoTextBlock(tb); return; }
+                    var w = s as Window; if (w != null) { busy = true; try { var t2 = T(w.Title); if (t2 != w.Title) w.Title = t2; } finally { busy = false; } }
+                } catch { }
+            });
+        }
+        // HTML-Text (Berichte): nur Textknoten übersetzen
+        static readonly Regex htmlText = new Regex(@">([^<>]*[A-Za-zÄÖÜäöüß][^<>]*)<", RegexOptions.Compiled);
+        public static string Html(string html) {
+            if (!Active || string.IsNullOrEmpty(html)) return html;
+            return htmlText.Replace(html, m => {
+                string raw = m.Groups[1].Value; string dec = System.Net.WebUtility.HtmlDecode(raw);
+                string t = T(dec); if (t == dec) return m.Value;
+                return ">" + System.Net.WebUtility.HtmlEncode(t) + "<";
+            });
+        }
+    }
+}
+
+'@
+function Initialize-I18n([string]$Code, [switch]$Download) {
+    $script:UiLang = $(if ($LangList.Contains($Code)) { $Code } else { 'de-DE' })
+    if ($script:UiLang -eq 'de-DE') {
+        $script:I18nOn = $false
+        if ('PcTools.I18n' -as [type]) { [PcTools.I18n]::Load('de-DE', $null) }
+        return $true
+    }
+    $f = Get-LangFile $script:UiLang
+    if (-not $f -and $Download) { try { $f = Save-LangFile $script:UiLang } catch { $f = '' } }
+    if (-not $f) { $script:I18nOn = $false; return $false }
+    if (-not ('PcTools.I18n' -as [type])) {
+        Add-Type -TypeDefinition $I18nCs -ReferencedAssemblies PresentationFramework, PresentationCore, WindowsBase, System.Xaml, System -ErrorAction Stop
+    }
+    Add-Type -AssemblyName System.Web.Extensions
+    $js = New-Object Web.Script.Serialization.JavaScriptSerializer; $js.MaxJsonLength = [int]::MaxValue
+    $o = $js.DeserializeObject([IO.File]::ReadAllText($f, [Text.Encoding]::UTF8))
+    $script:LangMeta = $o['meta']
+    [PcTools.I18n]::Load($script:UiLang, $o['strings'])
+    [PcTools.I18n]::Install()
+    $script:I18nOn = $true
+    return $true
+}
+# Sprachdatei nach einem PC-Tools-Update im Hintergrund auffrischen (gilt beim nächsten Start)
+function Update-LangFileBg {
+    if (-not $script:I18nOn) { return }
+    $app = ''; try { $app = [string]$script:LangMeta['app'] } catch { }
+    if ($app -eq $AppVersion) { return }
+    try { Invoke-Bg -Script { param($c) Save-LangFile $c } -Arguments @($script:UiLang) -Functions @('Save-LangFile') -Done { param($r, $e) } } catch { }
+}
+function Get-LangStatusText {
+    if ($script:UiLang -eq 'de-DE') { return 'Deutsch ist die Originalsprache von PC-Tools.' }
+    $st = ''; $pc = ''; try { $st = [string]$script:LangMeta['status']; $pc = [string]$script:LangMeta['reviewed'] } catch { }
+    $lab = switch ($st) { 'native' { 'von Muttersprachlern geprüft' } 'community' { 'von der Community geprüft' } default { 'maschinell übersetzt - Prüfung durch Muttersprachler erwünscht' } }
+    return ('{0}: {1}. Siehst du einen Fehler? "Übersetzungsfehler melden" - danke!' -f $LangList[$script:UiLang], $lab)
+}
+function Open-LangReport([string]$Text = '') {
+    $t = [uri]::EscapeDataString(('[{0}] Übersetzungsfehler' -f $script:UiLang))
+    $u = 'https://github.com/rhedv42-sudo/pc-tools/issues/new?template=translation-error.yml&labels=translation&title={0}&lang={1}&version={2}' -f $t, [uri]::EscapeDataString($script:UiLang), [uri]::EscapeDataString($AppVersion)
+    try { Start-Process $u } catch { }
+}
 $TokenFile = Join-Path $DataDir 'github.token'
 
 # ---- Privates GitHub-Repository als Update-Quelle:  github:BENUTZER/REPO  oder  github:BENUTZER/REPO@branch
@@ -4600,6 +4905,7 @@ function Unprotect-PString([string]$Blob) {
 function Get-EdgePath { @((Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'), (Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe')) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1 }
 # HTML-Datei per unsichtbarem Edge als PDF drucken. Gibt den erzeugten Pfad zurück (PDF oder - ohne Edge - HTML)
 function Convert-HtmlToPdf([string]$Html, [string]$Out) {
+    try { if ('PcTools.I18n' -as [type]) { $Html = [PcTools.I18n]::Html($Html) } } catch { }
     $tmp = Join-Path $env:TEMP ('PCPflege-{0}-{1}.html' -f $PID, (Get-Random))
     [IO.File]::WriteAllText($tmp, $Html, (New-Object Text.UTF8Encoding $true))
     $edge = Get-EdgePath
@@ -19801,6 +20107,11 @@ function Get-AiPageHelp([string]$TabName, [object[]]$Chapters, [int]$Max = 1800)
     return (Limit-AiText $sb.ToString().TrimEnd() $Max)
 }
 function Get-AiSystemPrompt([string]$Version, [string]$FeatureText, [string]$ContextText) {
+    $p = Get-AiSystemPromptDe $Version $FeatureText $ContextText
+    if ($script:UiLang -and $script:UiLang -ne 'de-DE') { $p += "`n`nIMPORTANT: The user interface language is " + $LangAiName[$script:UiLang] + ". Always answer in " + $LangAiName[$script:UiLang] + ", even though these instructions and the PC-Tools data are in German. Name PC-Tools pages and buttons as the user sees them in " + $LangAiName[$script:UiLang] + "." }
+    return $p
+}
+function Get-AiSystemPromptDe([string]$Version, [string]$FeatureText, [string]$ContextText) {
     $p = @"
 Du bist der KI-Assistent in PC-Tools (Version $Version), einem Windows-11-Werkzeugkasten für Pflege, Updates, Sicherheit, Reparatur und Fehlersuche. Du hilfst bei genau diesem PC.
 
@@ -19962,7 +20273,7 @@ if ($Install) {
         foreach ($n in @($UpdateFiles) + 'pcpflege.token') { $f = Join-Path $PSScriptRoot $n; if (Test-Path -LiteralPath $f) { Copy-Item -LiteralPath $f -Destination $tmp -Force } }
         Get-ChildItem $tmp -File | Unblock-File -ErrorAction SilentlyContinue
         try { $null = Start-HiddenPS (Join-Path $tmp 'PCPflege.ps1') @('-Install') -Elevate }
-        catch { [Windows.MessageBox]::Show('Die Einrichtung braucht Administratorrechte.', 'PC-Tools', 'OK', 'Warning') | Out-Null }
+        catch { [Windows.MessageBox]::Show((T ('Die Einrichtung braucht Administratorrechte.')), (T ('PC-Tools')), 'OK', 'Warning') | Out-Null }
         return
     }
     try {
@@ -19983,7 +20294,7 @@ if ($Install) {
         try { Add-MpPreference -ExclusionPath $DataDir -ErrorAction Stop } catch { }
         if ($PSScriptRoot -like (Join-Path $env:TEMP '*')) { Remove-Item -LiteralPath (Join-Path $PSScriptRoot 'pcpflege.token') -Force -ErrorAction SilentlyContinue }
         $null = Start-HiddenPS (Join-Path $DataDir 'PCPflege.ps1')
-    } catch { [Windows.MessageBox]::Show('Einrichtung fehlgeschlagen: ' + $_.Exception.Message, 'PC-Tools', 'OK', 'Error') | Out-Null }
+    } catch { [Windows.MessageBox]::Show((T ('Einrichtung fehlgeschlagen: ' + $_.Exception.Message)), (T ('PC-Tools')), 'OK', 'Error') | Out-Null }
     return
 }
 
@@ -20007,7 +20318,7 @@ if ($Monitor -or $DeskArrange -or $Topology) {
         Add-Content -LiteralPath $cliLog -Value ('{0:yyyy-MM-dd HH:mm:ss} FEHLER {1}' -f (Get-Date), $_.Exception.Message) -Encoding UTF8 -ErrorAction SilentlyContinue
         if (-not $Silent) {
             Add-Type -AssemblyName PresentationFramework
-            [Windows.MessageBox]::Show($_.Exception.Message, 'PC-Tools', 'OK', 'Warning') | Out-Null
+            [Windows.MessageBox]::Show((T ($_.Exception.Message)), (T ('PC-Tools')), 'OK', 'Warning') | Out-Null
         }
     }
     return
@@ -22311,6 +22622,7 @@ $pageSettings = New-Page 'Einstellungen' 'Verhalten, Aufbewahrung, Zeitlimits, P
         '<WrapPanel><Button x:Name="BtnSelfTest" Content="Selbsttest starten"/><Button x:Name="BtnRollback" Content="Auf Vorversion zurück ..." Style="{StaticResource Sec}" IsEnabled="False"/><Button x:Name="BtnErrLog" Content="Fehlerprotokoll" Style="{StaticResource Sec}"/></WrapPanel>',
         '<TextBlock x:Name="SelfTestInfo" Text="Der Selbsttest prüft PowerShell, .NET, Rechte, Datenordner, Einstellungen, Programmdatei, Zeitplan, Update-Quelle, Vorversion, winget und abgefangene Fehler." Foreground="#475569" FontSize="12" TextWrapping="Wrap" Margin="0,2,0,6"/>',
         (New-White (New-DataGrid 'SelfTestGrid' @('Bereich|Area|210', 'Ergebnis|State|200', 'Details|Detail|*') 'Height="290"')),
+        ('<Border Background="#F4F6FA" CornerRadius="10" Padding="14,12" Margin="0,12,0,0"><StackPanel><TextBlock Text="Sprache" FontWeight="SemiBold" Foreground="#1F2A44"/><TextBlock x:Name="StabLangInfo" Text="" Foreground="#6B7890" FontSize="12" TextWrapping="Wrap" Margin="0,2,0,8"/><WrapPanel><ComboBox x:Name="LangBox" Uid="notr" Width="230" Margin="0,0,8,6">{0}</ComboBox><Button x:Name="BtnLangApply" Content="Sprache übernehmen (Neustart)" Style="{{StaticResource Sec}}" Margin="0,0,8,6"/><Button x:Name="BtnLangReport" Content="Übersetzungsfehler melden" Style="{{StaticResource Sec}}" Margin="0,0,8,6"/></WrapPanel></StackPanel></Border>' -f ((@($LangList.Keys | ForEach-Object { '<ComboBoxItem Uid="notr" Content="{0}" Tag="{1}"/>' -f $LangList[$_], $_ })) -join '')),
         '<Border Background="#F4F6FA" CornerRadius="10" Padding="14,12" Margin="0,12,0,0"><StackPanel><TextBlock Text="Lite-Ansicht" FontWeight="SemiBold" Foreground="#1F2A44"/><TextBlock x:Name="StabLite" Text="" Foreground="#6B7890" FontSize="12" TextWrapping="Wrap" Margin="0,2,0,8"/><WrapPanel><Button x:Name="BtnLiteToggle" Content="Lite-Ansicht einschalten" Style="{StaticResource Sec}"/><Button x:Name="BtnEdAsk" Content="Beim nächsten Start Lite/Voll fragen" Style="{StaticResource Sec}"/></WrapPanel></StackPanel></Border>' +
         '<Border Background="#F4F6FA" CornerRadius="10" Padding="14,12" Margin="0,12,0,0"><StackPanel><TextBlock Text="Server-Modus (AD / Windows Server)" FontWeight="SemiBold" Foreground="#1F2A44"/><TextBlock x:Name="SrvModeState" Text="" Foreground="#6B7890" FontSize="12" TextWrapping="Wrap" Margin="0,2,0,8"/><CheckBox x:Name="Settings_ServerMode" Content="Server-Werkzeuge anzeigen (AD, Azure/Entra, Server-Wartung)"/><TextBlock Text="Auf Windows Server sind die Server-Werkzeuge automatisch an. Auf einem normalen PC (z.B. Admin-Arbeitsplatz mit RSAT) lassen sie sich hier einschalten. Beim Einschalten bietet PC-Tools an, PowerShell-Remoting zu aktivieren (für Fern-Verwaltung)." Foreground="#6B7890" FontSize="12" TextWrapping="Wrap" Margin="0,8,0,0"/></StackPanel></Border>')) +
     (New-Card 'Virenschutz' @(
@@ -24652,6 +24964,7 @@ $xaml = @"
 "@
 
 Set-SplashStatus 'Oberfläche wird aufgebaut ...'
+try { $null = Initialize-I18n (Get-UiLang) -Download } catch { $script:I18nOn = $false }
 try {
     $window = [Windows.Markup.XamlReader]::Parse((Convert-ThemeXaml $xaml))
     if ($Script:Dark) { $window.Add_SourceInitialized({ try { $h = (New-Object Windows.Interop.WindowInteropHelper $window).Handle; $one = 1; [void][PCPflege.Dwm]::DwmSetWindowAttribute($h, 20, [ref]$one, 4) } catch { } }) }
@@ -24666,7 +24979,7 @@ try {
         if ($pv -and $pv -ne $AppVersion) {
             $null = Restore-PflegeVorversion ('Oberfläche ließ sich nicht laden: ' + $xErr)
             Remove-Item -LiteralPath (Join-Path $DataDir 'start.json') -Force -ErrorAction SilentlyContinue
-            [Windows.MessageBox]::Show(('Die Oberfläche von Version {0} konnte nicht geladen werden. PC-Tools hat automatisch die Vorversion {1} wiederhergestellt und startet sie jetzt.' -f $AppVersion, $pv), 'PC-Tools', 'OK', 'Information') | Out-Null
+            [Windows.MessageBox]::Show((T (('Die Oberfläche von Version {0} konnte nicht geladen werden. PC-Tools hat automatisch die Vorversion {1} wiederhergestellt und startet sie jetzt.' -f $AppVersion, $pv))), (T ('PC-Tools')), 'OK', 'Information') | Out-Null
             $null = Start-HiddenPS $PSCommandPath
             return
         }
@@ -24677,10 +24990,10 @@ try {
         if ($man -and [string]$man.Version -ne $AppVersion) {
             Install-PflegeUpdate $c.Settings.UpdateSource $man
             $fixed = $true
-            [Windows.MessageBox]::Show(('Die Oberfläche dieser Version konnte nicht geladen werden. Version {0} wurde deshalb aus der Update-Quelle installiert - bitte PC-Tools neu starten.' -f $man.Version), 'PC-Tools', 'OK', 'Information') | Out-Null
+            [Windows.MessageBox]::Show((T (('Die Oberfläche dieser Version konnte nicht geladen werden. Version {0} wurde deshalb aus der Update-Quelle installiert - bitte PC-Tools neu starten.' -f $man.Version))), (T ('PC-Tools')), 'OK', 'Information') | Out-Null
         }
     } catch { }
-    if (-not $fixed) { [Windows.MessageBox]::Show("Oberfläche konnte nicht geladen werden:`n$xErr", 'PC-Tools', 'OK', 'Error') | Out-Null }
+    if (-not $fixed) { [Windows.MessageBox]::Show((T ("Oberfläche konnte nicht geladen werden:`n$xErr")), (T ('PC-Tools')), 'OK', 'Error') | Out-Null }
     return
 }
 
@@ -24697,7 +25010,7 @@ $window.Add_ContentRendered({
     # Start erfolgreich -> Startschutz zurücksetzen
     try { [ordered]@{ Version = $AppVersion; Fails = 0; Ok = $true; Time = (Get-Date).ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $DataDir 'start.json') -Encoding UTF8 } catch { }
     $ri = Join-Path $DataDir 'rollback-info.txt'
-    if (Test-Path -LiteralPath $ri) { try { $t = Get-Content -LiteralPath $ri -Raw -Encoding UTF8; Remove-Item -LiteralPath $ri -Force; [Windows.MessageBox]::Show($t, 'PC-Tools - automatisch zurückgesetzt', 'OK', 'Information') | Out-Null } catch { } }
+    if (Test-Path -LiteralPath $ri) { try { $t = Get-Content -LiteralPath $ri -Raw -Encoding UTF8; Remove-Item -LiteralPath $ri -Force; [Windows.MessageBox]::Show((T ($t)), (T ('PC-Tools - automatisch zurückgesetzt')), 'OK', 'Information') | Out-Null } catch { } }
 })
 $ui = @{}
 foreach ($n in 'Tabs', 'LogBox', 'Progress', 'StatusText', 'InfoOS', 'InfoModel', 'InfoOem', 'InfoDisk', 'InfoUptime', 'InfoReboot', 'InfoLastRun', 'InfoTask', 'ScheduleStatus',
@@ -24933,7 +25246,7 @@ function Save-All([switch]$Quiet) {
         $ui.StatusText.Text = 'Einstellungen gespeichert. ' + $msg
     } catch {
         $ui.StatusText.Text = 'Einstellungen gespeichert, Zeitplan-Fehler: ' + $_.Exception.Message
-        if (-not $Quiet) { [Windows.MessageBox]::Show($_.Exception.Message, 'PC-Tools', 'OK', 'Warning') | Out-Null }
+        if (-not $Quiet) { [Windows.MessageBox]::Show((T ($_.Exception.Message)), (T ('PC-Tools')), 'OK', 'Warning') | Out-Null }
     }
     Update-Overview
     return $cfg
@@ -25029,7 +25342,9 @@ function Read-JobLog {
         $cut = $text.LastIndexOf("`n")
         if ($cut -lt 0) { $j.Rest = $text; return }
         $j.Rest = $text.Substring($cut + 1)
-        $ui.LogBox.AppendText($text.Substring(0, $cut + 1).Replace("`r", ''))
+        $chunk = $text.Substring(0, $cut + 1).Replace("`r", '')
+        if ($script:I18nOn) { $chunk = (@($chunk -split "`n") | ForEach-Object { T $_ }) -join "`n" }
+        $ui.LogBox.AppendText($chunk)
         $ui.LogBox.ScrollToEnd()
     } catch { }
 }
@@ -25148,20 +25463,20 @@ function Update-ProfInfo {
 }
 function Install-SelectedProfile {
     if (-not $script:ProfCurrent) { return }
-    if ($script:Job) { [Windows.MessageBox]::Show('Es läuft bereits eine Aufgabe.', 'PC-Tools', 'OK', 'Information') | Out-Null; return }
+    if ($script:Job) { [Windows.MessageBox]::Show((T ('Es läuft bereits eine Aufgabe.')), (T ('PC-Tools')), 'OK', 'Information') | Out-Null; return }
     $sel = @($script:ProfItems | Where-Object { $_.Check.IsChecked } | ForEach-Object { $_.Item })
-    if (-not $sel.Count) { [Windows.MessageBox]::Show('Bitte mindestens ein Programm auswählen.', 'PC-Tools', 'OK', 'Information') | Out-Null; return }
+    if (-not $sel.Count) { [Windows.MessageBox]::Show((T ('Bitte mindestens ein Programm auswählen.')), (T ('PC-Tools')), 'OK', 'Information') | Out-Null; return }
     $nin = @($sel | Where-Object { $_.Src -eq 'Ninite' } | ForEach-Object { $_.Id })
     $wg  = @($sel | Where-Object { $_.Src -eq 'winget' } | ForEach-Object { $_.Id })
     $dir = @($sel | Where-Object { $_.Src -eq 'Hersteller' } | ForEach-Object { $_.Id })
     $win = @($sel | Where-Object { $_.Src -eq 'Windows' } | ForEach-Object { $_.Id })
     if ($nin.Count -and -not (Get-NinitePathGui)) {
-        $r = [Windows.MessageBox]::Show('NinitePro.exe wurde nicht gefunden - die Ninite-Programme werden übersprungen. Trotzdem fortfahren?', 'PC-Tools', 'YesNo', 'Warning')
+        $r = [Windows.MessageBox]::Show((T ('NinitePro.exe wurde nicht gefunden - die Ninite-Programme werden übersprungen. Trotzdem fortfahren?')), (T ('PC-Tools')), 'YesNo', 'Warning')
         if ($r -ne 'Yes') { return }
         $nin = @()
     }
     $msg = "Profil '{0}' installieren ({2} Programme)?`n`n{1}" -f $script:ProfCurrent.Name, (($sel | ForEach-Object { '- ' + $_.Label }) -join "`n"), $sel.Count
-    if ([Windows.MessageBox]::Show($msg, 'PC-Tools - Neues Gerät', 'YesNo', 'Question') -ne 'Yes') { return }
+    if ([Windows.MessageBox]::Show((T ($msg)), (T ('PC-Tools - Neues Gerät')), 'YesNo', 'Question') -ne 'Yes') { return }
     $parts = @(); if ($nin.Count) { $parts += 'NiniteInstall' }; if ($wg.Count) { $parts += 'WingetInstall' }; if ($dir.Count) { $parts += 'DirectInstall' }; if ($win.Count) { $parts += 'WinFeatures' }
     Start-Run -Parts $parts -Apps $nin -WingetApps $wg -DirectApps $dir -Job $(if ($win.Count) { @{ WinFeatures = $win } } else { $null })
 }
@@ -25335,7 +25650,7 @@ function Get-FreeTargetPath([string]$Dir, [string]$Name) {
 function Invoke-DeskCleanup {
     $sel = @($script:DeskRows | Where-Object { $_.Check.IsChecked } | ForEach-Object { $_.Plan })
     if (-not $sel.Count) { return }
-    if ([Windows.MessageBox]::Show(('{0} Element(e) verschieben? Es wird nichts gelöscht, alles lässt sich rückgängig machen.' -f $sel.Count), 'PC-Tools - Desktop aufräumen', 'YesNo', 'Question') -ne 'Yes') { return }
+    if ([Windows.MessageBox]::Show((T (('{0} Element(e) verschieben? Es wird nichts gelöscht, alles lässt sich rückgängig machen.' -f $sel.Count))), (T ('PC-Tools - Desktop aufräumen')), 'YesNo', 'Question') -ne 'Yes') { return }
     $moves = [System.Collections.Generic.List[object]]::new()
     $errors = 0
     $window.Cursor = 'Wait'
@@ -25367,9 +25682,9 @@ function Invoke-DeskCleanup {
 function Undo-DeskCleanup {
     $undoDir = Join-Path $DataDir 'Desktop'
     $last = Get-ChildItem $undoDir -Filter 'undo_*.json' -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
-    if (-not $last) { [Windows.MessageBox]::Show('Es gibt nichts rückgängig zu machen.', 'PC-Tools') | Out-Null; return }
+    if (-not $last) { [Windows.MessageBox]::Show((T ('Es gibt nichts rückgängig zu machen.')), (T ('PC-Tools'))) | Out-Null; return }
     $moves = @(Get-Content -LiteralPath $last.FullName -Raw -Encoding UTF8 | ConvertFrom-Json)
-    if ([Windows.MessageBox]::Show(('Letzte Aufräumaktion vom {0:dd.MM.yyyy HH:mm} rückgängig machen ({1} Elemente)?' -f $last.LastWriteTime, $moves.Count), 'PC-Tools', 'YesNo', 'Question') -ne 'Yes') { return }
+    if ([Windows.MessageBox]::Show((T (('Letzte Aufräumaktion vom {0:dd.MM.yyyy HH:mm} rückgängig machen ({1} Elemente)?' -f $last.LastWriteTime, $moves.Count))), (T ('PC-Tools')), 'YesNo', 'Question') -ne 'Yes') { return }
     $ok = 0
     foreach ($m in $moves) {
         if ((Test-Path -LiteralPath $m.To) -and -not (Test-Path -LiteralPath $m.From)) {
@@ -25394,7 +25709,7 @@ function Invoke-GuiAutoArrangeCheck([scriptblock]$Action) {
         if ($_.Exception.Message -ne 'AUTOARRANGE') { throw }
         $window.Cursor = $null
         $q = "Auf dem Desktop ist 'Symbole automatisch anordnen' eingeschaltet - damit würde Windows jede Anordnung sofort wieder zurücksetzen.`n`nAusschalten und den Explorer kurz neu starten? (Offene Explorer-Fenster werden geschlossen.)"
-        if ([Windows.MessageBox]::Show($q, 'PC-Tools', 'YesNo', 'Question') -ne 'Yes') { return $null }
+        if ([Windows.MessageBox]::Show((T ($q)), (T ('PC-Tools')), 'YesNo', 'Question') -ne 'Yes') { return $null }
         $window.Cursor = 'Wait'
         return (& $Action $true)
     }
@@ -25411,7 +25726,7 @@ function Invoke-DeskArrangeGui {
         $ui.DeskArrInfo.Text = ('Angeordnet: {0} Symbole in {1} Kategorien{2}.' -f $r.Count, $r.Groups.Count, $note)
         $ui.DeskArrInfo.ToolTip = Get-DeskGroupText $r.Groups
         $ui.StatusText.Text = 'Desktop-Symbole nach Kategorien angeordnet.'
-    } catch { [Windows.MessageBox]::Show('Anordnen fehlgeschlagen: ' + $_.Exception.Message, 'PC-Tools', 'OK', 'Warning') | Out-Null }
+    } catch { [Windows.MessageBox]::Show((T ('Anordnen fehlgeschlagen: ' + $_.Exception.Message)), (T ('PC-Tools')), 'OK', 'Warning') | Out-Null }
     finally { $window.Cursor = $null }
 }
 function Show-DeskArrangePreview {
@@ -25421,8 +25736,8 @@ function Show-DeskArrangePreview {
         $ui.DeskArrInfo.Text = 'Vorschau: ' + (Get-DeskGroupShort $plan.Groups)
         $ui.DeskArrInfo.ToolTip = Get-DeskGroupText $plan.Groups
         $window.Cursor = $null
-        [Windows.MessageBox]::Show(("So werden die {0} Symbole von links nach rechts angeordnet:`n`n{1}" -f $plan.Count, (Get-DeskGroupText $plan.Groups)), 'PC-Tools - Vorschau', 'OK', 'Information') | Out-Null
-    } catch { [Windows.MessageBox]::Show('Vorschau fehlgeschlagen: ' + $_.Exception.Message, 'PC-Tools', 'OK', 'Warning') | Out-Null }
+        [Windows.MessageBox]::Show((T (("So werden die {0} Symbole von links nach rechts angeordnet:`n`n{1}" -f $plan.Count, (Get-DeskGroupText $plan.Groups)))), (T ('PC-Tools - Vorschau')), 'OK', 'Information') | Out-Null
+    } catch { [Windows.MessageBox]::Show((T ('Vorschau fehlgeschlagen: ' + $_.Exception.Message)), (T ('PC-Tools')), 'OK', 'Warning') | Out-Null }
     finally { $window.Cursor = $null }
 }
 
@@ -25459,7 +25774,7 @@ function Invoke-DeskFolders {
     $cfg = Get-ConfigFromUi; Save-PflegeConfig $cfg
     $window.Cursor = 'Wait'
     try { $plan = @(Get-DeskFolderPlan $cfg) } finally { $window.Cursor = $null }
-    if (-not $plan.Count) { [Windows.MessageBox]::Show('Keine Verknüpfungen zum Einsortieren gefunden.', 'PC-Tools') | Out-Null; return }
+    if (-not $plan.Count) { [Windows.MessageBox]::Show((T ('Keine Verknüpfungen zum Einsortieren gefunden.')), (T ('PC-Tools'))) | Out-Null; return }
     $groups = @($plan | Group-Object Group)
     $txt = ($groups | ForEach-Object { '{0} ({1}): {2}' -f (Get-DeskFolderName $_.Name), $_.Count, (($_.Group | ForEach-Object { $_.Item.BaseName }) -join ', ') }) -join "`n`n"
     if (-not (Confirm-Ui ("{0} Verknüpfungen werden in {1} Ordner auf dem Desktop einsortiert:`n`n{2}`n`nWindows-Symbole, PC-Tools, Ordner und Dateien bleiben auf dem Desktop. Mit 'Rückgängig' lässt sich alles zurückholen.`n`nJetzt einsortieren?" -f $plan.Count, $groups.Count, $txt))) { return }
@@ -25567,7 +25882,7 @@ function Invoke-MonitorAction([string]$Tag) {
                 Set-MonitorProfile $name
                 $ui.StatusText.Text = ('Monitor-Profil "{0}" angewendet.' -f $name)
                 try { Invoke-AfterMonitorSwitch (Get-ConfigFromUi) } catch { $ui.StatusText.Text += ' Desktop-Symbole: ' + $_.Exception.Message }
-            } catch { [Windows.MessageBox]::Show($_.Exception.Message, 'PC-Tools', 'OK', 'Warning') | Out-Null }
+            } catch { [Windows.MessageBox]::Show((T ($_.Exception.Message)), (T ('PC-Tools')), 'OK', 'Warning') | Out-Null }
             finally { $window.Cursor = $null; Build-MonitorPage }
         }
         'Link' {
@@ -25576,10 +25891,10 @@ function Invoke-MonitorAction([string]$Tag) {
                 $f = Join-Path ([Environment]::GetFolderPath('Desktop')) (('Monitor - {0}.lnk' -f $name) -replace '[\\/:*?"<>|]', '_')
                 New-PflegeCommandShortcut $f ('-Monitor "{0}"' -f $name) ((Join-Path $env:SystemRoot 'System32\DisplaySwitch.exe') + ',0') ('Monitor-Anordnung "{0}" einschalten (PC-Tools)' -f $name)
                 $ui.StatusText.Text = 'Verknüpfung erstellt: ' + $f
-            } catch { [Windows.MessageBox]::Show('Verknüpfung konnte nicht erstellt werden: ' + $_.Exception.Message, 'PC-Tools', 'OK', 'Warning') | Out-Null }
+            } catch { [Windows.MessageBox]::Show((T ('Verknüpfung konnte nicht erstellt werden: ' + $_.Exception.Message)), (T ('PC-Tools')), 'OK', 'Warning') | Out-Null }
         }
         'Del' {
-            if ([Windows.MessageBox]::Show(('Profil "{0}" löschen? Eine Desktop-Verknüpfung dafür funktioniert danach nicht mehr.' -f $name), 'PC-Tools', 'YesNo', 'Question') -ne 'Yes') { return }
+            if ([Windows.MessageBox]::Show((T (('Profil "{0}" löschen? Eine Desktop-Verknüpfung dafür funktioniert danach nicht mehr.' -f $name))), (T ('PC-Tools')), 'YesNo', 'Question') -ne 'Yes') { return }
             Remove-Item -LiteralPath (Get-MonitorProfileFile $name) -Force -ErrorAction SilentlyContinue
             $lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) (('Monitor - {0}.lnk' -f $name) -replace '[\\/:*?"<>|]', '_')
             Remove-Item -LiteralPath $lnk -Force -ErrorAction SilentlyContinue
@@ -25589,21 +25904,21 @@ function Invoke-MonitorAction([string]$Tag) {
 }
 function Save-MonitorProfileGui {
     $name = ($ui.MonName.Text -replace '["\\/:*?<>|]', '').Trim()
-    if (-not $name) { [Windows.MessageBox]::Show('Bitte einen Namen für das Profil eingeben, z.B. "Arbeit" oder "Nur Hauptmonitor".', 'PC-Tools') | Out-Null; return }
-    if ((Test-Path -LiteralPath (Get-MonitorProfileFile $name)) -and [Windows.MessageBox]::Show(('Profil "{0}" gibt es schon. Mit der aktuellen Anordnung überschreiben?' -f $name), 'PC-Tools', 'YesNo', 'Question') -ne 'Yes') { return }
+    if (-not $name) { [Windows.MessageBox]::Show((T ('Bitte einen Namen für das Profil eingeben, z.B. "Arbeit" oder "Nur Hauptmonitor".')), (T ('PC-Tools'))) | Out-Null; return }
+    if ((Test-Path -LiteralPath (Get-MonitorProfileFile $name)) -and [Windows.MessageBox]::Show((T (('Profil "{0}" gibt es schon. Mit der aktuellen Anordnung überschreiben?' -f $name))), (T ('PC-Tools')), 'YesNo', 'Question') -ne 'Yes') { return }
     try {
         $p = Save-MonitorProfile $name
         $ui.MonName.Text = ''
         Build-MonitorPage
         $ui.StatusText.Text = ('Monitor-Profil "{0}" gespeichert ({1} Monitor(e)).' -f $name, @($p.Monitors).Count)
-        if ([Windows.MessageBox]::Show(('Profil "{0}" gespeichert. Gleich eine Verknüpfung auf dem Desktop anlegen?' -f $name), 'PC-Tools', 'YesNo', 'Question') -eq 'Yes') { Invoke-MonitorAction ('Link|' + $name) }
-    } catch { [Windows.MessageBox]::Show('Speichern fehlgeschlagen: ' + $_.Exception.Message, 'PC-Tools', 'OK', 'Warning') | Out-Null }
+        if ([Windows.MessageBox]::Show((T (('Profil "{0}" gespeichert. Gleich eine Verknüpfung auf dem Desktop anlegen?' -f $name))), (T ('PC-Tools')), 'YesNo', 'Question') -eq 'Yes') { Invoke-MonitorAction ('Link|' + $name) }
+    } catch { [Windows.MessageBox]::Show((T ('Speichern fehlgeschlagen: ' + $_.Exception.Message)), (T ('PC-Tools')), 'OK', 'Warning') | Out-Null }
 }
 function Set-TopologyGui([string]$Topo) {
     Import-NativeHelpers
     $t = switch ($Topo) { 'Intern' { 1 } 'Duplizieren' { 2 } 'Erweitern' { 4 } 'Extern' { 8 } }
     $r = [PCPflege.Displays]::SetTopology([uint32]$t)
-    if ($r -ne 0) { [Windows.MessageBox]::Show(('Umschalten nicht möglich (Fehler {0}) - ist ein zweiter Bildschirm angeschlossen?' -f $r), 'PC-Tools', 'OK', 'Warning') | Out-Null; return }
+    if ($r -ne 0) { [Windows.MessageBox]::Show((T (('Umschalten nicht möglich (Fehler {0}) - ist ein zweiter Bildschirm angeschlossen?' -f $r))), (T ('PC-Tools')), 'OK', 'Warning') | Out-Null; return }
     Start-Sleep -Seconds 2
     Build-MonitorPage
 }
@@ -25688,11 +26003,11 @@ function Test-Match($Obj, [string]$Text, [string[]]$Props) {
     foreach ($p in $Props) { if ([string]$Obj.$p -like ('*' + $Text + '*')) { return $true } }
     return $false
 }
-function Confirm-Ui([string]$Text, [string]$Icon = 'Question') { [Windows.MessageBox]::Show($Text, 'PC-Tools', 'YesNo', $Icon) -eq 'Yes' }
+function Confirm-Ui([string]$Text, [string]$Icon = 'Question') { [Windows.MessageBox]::Show((T ($Text)), (T ('PC-Tools')), 'YesNo', $Icon) -eq 'Yes' }
 function Show-UiError([string]$Text) {
     # 10.0: Fehlerfenster mit "Assistent fragen" (abschaltbar: KI-Assistent > Datenschutz); fällt bei jedem Problem auf das normale Fenster zurück
     try { if ((Get-Command Show-AiErrorDialog -ErrorAction SilentlyContinue) -and (Show-AiErrorDialog $Text)) { return } } catch { }
-    [Windows.MessageBox]::Show($Text, 'PC-Tools', 'OK', 'Warning') | Out-Null
+    [Windows.MessageBox]::Show((T ($Text)), (T ('PC-Tools')), 'OK', 'Warning') | Out-Null
 }
 function Start-Tool([string]$Cmd) {
     $exe, $arg = $Cmd -split ' ', 2
@@ -26590,7 +26905,7 @@ $dkTimer.Add_Tick({
         $ui.DkProgress.IsIndeterminate = $false
         $dur = $el.ToString('hh\:mm\:ss')
         Update-DiskList -Select $no
-        if ($dkSync.Success) { $ui.DkStatus.Text = "Fertig nach $dur."; [Windows.MessageBox]::Show("Vorgang erfolgreich abgeschlossen ($dur).", 'PC-Tools', 'OK', 'Information') | Out-Null }
+        if ($dkSync.Success) { $ui.DkStatus.Text = "Fertig nach $dur."; [Windows.MessageBox]::Show((T ("Vorgang erfolgreich abgeschlossen ($dur).")), (T ('PC-Tools')), 'OK', 'Information') | Out-Null }
         else { $ui.DkStatus.Text = 'Mit Fehler beendet - siehe Protokoll.'; Show-UiError 'Der Vorgang wurde mit einem Fehler beendet. Details stehen im Protokoll darunter.' }
     }
 })
@@ -27845,14 +28160,14 @@ function Invoke-BlOneClick {
     $v = $null; try { $v = Get-BitLockerVolume -MountPoint $mp -ErrorAction Stop } catch { Show-UiError ('BitLocker-Status nicht lesbar: ' + $_.Exception.Message); return }
     if ([string]$v.ProtectionStatus -eq 'On') {
         $folder = Save-BlKeyToTools $mp
-        [Windows.MessageBox]::Show(("Laufwerk {0} ist bereits mit BitLocker verschlüsselt.`n`nEine Kopie des Wiederherstellungsschlüssels liegt jetzt im Ordner:`n{1}`n`nBitte diesen Schlüssel zusätzlich außerhalb des PCs sichern (USB-Stick, Ausdruck)." -f $mp, $folder), 'PC-Tools - BitLocker', 'OK', 'Information') | Out-Null
+        [Windows.MessageBox]::Show((T (("Laufwerk {0} ist bereits mit BitLocker verschlüsselt.`n`nEine Kopie des Wiederherstellungsschlüssels liegt jetzt im Ordner:`n{1}`n`nBitte diesen Schlüssel zusätzlich außerhalb des PCs sichern (USB-Stick, Ausdruck)." -f $mp, $folder))), (T ('PC-Tools - BitLocker')), 'OK', 'Information') | Out-Null
         if ($folder) { try { Start-Process explorer.exe $folder } catch { } }
         return
     }
     if ($v.VolumeStatus -notlike '*Decrypted*' -and [string]$v.ProtectionStatus -ne 'Off') { Show-UiError ('{0} wird gerade ver- oder entschlüsselt - bitte warten.' -f $mp); return }
     $tpm = $null; try { $tpm = Get-Tpm -ErrorAction Stop } catch { }
     if (-not $tpm -or -not $tpm.TpmReady) {
-        [Windows.MessageBox]::Show("Für die automatische Entsperrung über den TPM-Chip ist kein betriebsbereites TPM vorhanden.`n`nBitte im BIOS/UEFI das TPM (bei manchen Geräten `"Security Chip`" / `"PTT`" / `"fTPM`") einschalten - siehe Seite BIOS-Einstellungen > Sicherheit.", 'PC-Tools - BitLocker', 'OK', 'Warning') | Out-Null
+        [Windows.MessageBox]::Show((T ("Für die automatische Entsperrung über den TPM-Chip ist kein betriebsbereites TPM vorhanden.`n`nBitte im BIOS/UEFI das TPM (bei manchen Geräten `"Security Chip`" / `"PTT`" / `"fTPM`") einschalten - siehe Seite BIOS-Einstellungen > Sicherheit.")), (T ('PC-Tools - BitLocker')), 'OK', 'Warning') | Out-Null
         return
     }
     if (-not (Confirm-Ui ("Laufwerk {0} jetzt mit BitLocker (XTS-AES 256) verschlüsseln?`n`n- Der Wiederherstellungsschlüssel wird automatisch im PC-Tools-Ordner gespeichert.`n- Entsperrt wird automatisch über den TPM-Chip - du musst beim Start nichts eingeben.`n- Die Verschlüsselung läuft im Hintergrund, der PC bleibt nutzbar." -f $mp) 'Warning')) { return }
@@ -27863,7 +28178,7 @@ function Invoke-BlOneClick {
     $folder = Save-BlKeyToTools $mp
     try { foreach ($k in @((Get-BitLockerVolume -MountPoint $mp).KeyProtector | Where-Object { [string]$_.KeyProtectorType -eq 'RecoveryPassword' })) { Backup-BitLockerKeyProtector -MountPoint $mp -KeyProtectorId $k.KeyProtectorId -ErrorAction Stop | Out-Null } } catch { }
     $ui.StatusText.Text = 'BitLocker verschlüsselt {0} im Hintergrund - Schlüssel gespeichert.' -f $mp
-    [Windows.MessageBox]::Show(("BitLocker ist eingeschaltet - {0} wird im Hintergrund verschlüsselt (der PC bleibt nutzbar).`n`nDer Wiederherstellungsschlüssel liegt im Ordner:`n{1}`n`nSEHR WICHTIG: Diesen Schlüssel zusätzlich außerhalb des PCs sichern (USB-Stick, Ausdruck oder Microsoft-Konto). Ohne ihn sind die Daten nach einem Hardwaretausch verloren. Die Datei `"WICHTIG - unbedingt sichern.txt`" im Ordner erklärt alles." -f $mp, $folder), 'PC-Tools - BitLocker', 'OK', 'Information') | Out-Null
+    [Windows.MessageBox]::Show((T (("BitLocker ist eingeschaltet - {0} wird im Hintergrund verschlüsselt (der PC bleibt nutzbar).`n`nDer Wiederherstellungsschlüssel liegt im Ordner:`n{1}`n`nSEHR WICHTIG: Diesen Schlüssel zusätzlich außerhalb des PCs sichern (USB-Stick, Ausdruck oder Microsoft-Konto). Ohne ihn sind die Daten nach einem Hardwaretausch verloren. Die Datei `"WICHTIG - unbedingt sichern.txt`" im Ordner erklärt alles." -f $mp, $folder))), (T ('PC-Tools - BitLocker')), 'OK', 'Information') | Out-Null
     if ($folder) { try { Start-Process explorer.exe $folder } catch { } }
     Update-Security
 }
@@ -28563,7 +28878,7 @@ function Start-BrowserPw([string]$Key, [string]$Mode) {
         $url = $b.Import
     }
     try { Set-Clipboard -Value $target } catch { try { [Windows.Clipboard]::SetText($target) } catch { } }
-    [Windows.MessageBox]::Show($msg, 'PC-Tools - ' + $b.Name, 'OK', 'Information') | Out-Null
+    [Windows.MessageBox]::Show((T ($msg)), (T ('PC-Tools - ' + $b.Name)), 'OK', 'Information') | Out-Null
     try { Start-Process -FilePath $exe -ArgumentList $url } catch { Show-UiError ('{0} konnte nicht gestartet werden: {1}' -f $b.Name, $_.Exception.Message) }
     if ($Mode -eq 'Export') { $ui.StatusText.Text = 'Kennwort-Export: Ordner in der Zwischenablage - nach dem Speichern "Umzugspaket erstellen".' }
 }
@@ -28855,7 +29170,7 @@ function Invoke-TweakApply {
     $ch = @($script:TweakRows | Where-Object { [bool]$_.Check.IsChecked -ne $_.Current })
     if (-not $ch.Count) { return }
     $list = ($ch | ForEach-Object { '{0} {1}' -f $(if ($_.Check.IsChecked) { '[an] ' } else { '[aus]' }), $_.T.Title }) -join "`n"
-    if ([Windows.MessageBox]::Show(("Folgende Änderungen übernehmen?`n`n{0}`n`nVorher wird ein Wiederherstellungspunkt erstellt." -f $list), 'PC-Tools - Tuning', 'YesNo', 'Question') -ne 'Yes') { return }
+    if ([Windows.MessageBox]::Show((T (("Folgende Änderungen übernehmen?`n`n{0}`n`nVorher wird ein Wiederherstellungspunkt erstellt." -f $list))), (T ('PC-Tools - Tuning')), 'YesNo', 'Question') -ne 'Yes') { return }
     $window.Cursor = 'Wait'
     $ui.StatusText.Text = 'Wiederherstellungspunkt wird erstellt ...'
     try {
@@ -28876,16 +29191,16 @@ function Invoke-TweakApply {
     $msg = '{0} Änderung(en) übernommen{1}.' -f ($ch.Count - $fail), $(if ($fail) { ", $fail fehlgeschlagen (siehe Protokoll)" } else { '' })
     $ui.StatusText.Text = $msg
     if ($needs['Explorer']) {
-        if ([Windows.MessageBox]::Show($msg + "`n`nEinige Änderungen werden erst nach einem Neustart des Explorers sichtbar. Jetzt neu starten? (Offene Explorer-Fenster werden geschlossen.)", 'PC-Tools', 'YesNo', 'Question') -eq 'Yes') { Restart-Explorer }
+        if ([Windows.MessageBox]::Show((T ($msg + "`n`nEinige Änderungen werden erst nach einem Neustart des Explorers sichtbar. Jetzt neu starten? (Offene Explorer-Fenster werden geschlossen.)")), (T ('PC-Tools')), 'YesNo', 'Question') -eq 'Yes') { Restart-Explorer }
     }
     if ($needs['Neustart'] -or $needs['Abmelden']) {
-        [Windows.MessageBox]::Show('Einige Änderungen wirken erst nach ' + $(if ($needs['Neustart']) { 'einem Neustart' } else { 'dem nächsten Abmelden' }) + '.', 'PC-Tools', 'OK', 'Information') | Out-Null
+        [Windows.MessageBox]::Show((T ('Einige Änderungen wirken erst nach ' + $(if ($needs['Neustart']) { 'einem Neustart' } else { 'dem nächsten Abmelden' }) + '.')), (T ('PC-Tools')), 'OK', 'Information') | Out-Null
     }
 }
 # ---------------------------------------------------------------- Alle Optimierungen: jede Tuning-Einstellung mit einem Klick an
 function Invoke-AllTweaks {
     $todo = @(foreach ($t in $Tweaks) { $on = $false; try { $on = [bool](& $t.Test) } catch { }; if (-not $on) { $t } })
-    if (-not $todo.Count) { [Windows.MessageBox]::Show(('Alle {0} Optimierungen sind bereits aktiv.' -f $Tweaks.Count), 'PC-Tools - Alle Optimierungen', 'OK', 'Information') | Out-Null; return }
+    if (-not $todo.Count) { [Windows.MessageBox]::Show((T (('Alle {0} Optimierungen sind bereits aktiv.' -f $Tweaks.Count))), (T ('PC-Tools - Alle Optimierungen')), 'OK', 'Information') | Out-Null; return }
     $q = "Alle Optimierungen einschalten?`n`n{0} von {1} Einstellungen werden gesetzt:`n{2}`n`nVorher wird ein Wiederherstellungspunkt erstellt. Rückgängig: Seite Tuning (Vorgabe ""Windows-Standard"")." -f $todo.Count, $Tweaks.Count, (($todo | ForEach-Object { '  - ' + $_.Title }) -join "`n")
     if (-not (Confirm-Ui $q)) { return }
     $window.Cursor = 'Wait'; $ui.StatusText.Text = 'Alle Optimierungen: Wiederherstellungspunkt ...'
@@ -28903,9 +29218,9 @@ function Invoke-AllTweaks {
     $msg = '{0} Optimierung(en) eingeschaltet{1}.' -f ($todo.Count - $fail.Count), $(if ($fail.Count) { ', nicht geklappt: ' + ($fail -join ', ') } else { '' })
     $ui.StatusText.Text = 'Alle Optimierungen: ' + $msg
     if ($needs['Explorer']) {
-        if ([Windows.MessageBox]::Show($msg + "`n`nEinige Änderungen werden erst nach einem Neustart des Explorers sichtbar. Jetzt neu starten? (Offene Explorer-Fenster werden geschlossen.)", 'PC-Tools', 'YesNo', 'Question') -eq 'Yes') { Restart-Explorer }
-    } else { [Windows.MessageBox]::Show($msg, 'PC-Tools - Alle Optimierungen', 'OK', 'Information') | Out-Null }
-    if ($needs['Neustart'] -or $needs['Abmelden']) { [Windows.MessageBox]::Show('Einige Änderungen wirken erst nach ' + $(if ($needs['Neustart']) { 'einem Neustart' } else { 'dem nächsten Abmelden' }) + '.', 'PC-Tools', 'OK', 'Information') | Out-Null }
+        if ([Windows.MessageBox]::Show((T ($msg + "`n`nEinige Änderungen werden erst nach einem Neustart des Explorers sichtbar. Jetzt neu starten? (Offene Explorer-Fenster werden geschlossen.)")), (T ('PC-Tools')), 'YesNo', 'Question') -eq 'Yes') { Restart-Explorer }
+    } else { [Windows.MessageBox]::Show((T ($msg)), (T ('PC-Tools - Alle Optimierungen')), 'OK', 'Information') | Out-Null }
+    if ($needs['Neustart'] -or $needs['Abmelden']) { [Windows.MessageBox]::Show((T ('Einige Änderungen wirken erst nach ' + $(if ($needs['Neustart']) { 'einem Neustart' } else { 'dem nächsten Abmelden' }) + '.')), (T ('PC-Tools')), 'OK', 'Information') | Out-Null }
 }
 # ---------------------------------------------------------------- Mega-Leistung: ein Klick auf maximale Leistung
 function Enable-UltimatePerfPlan {
@@ -28952,7 +29267,7 @@ function Invoke-MegaPerf {
     try { if ($script:TweakRows) { Update-TweakState } } catch { }
     try { Build-Autostart } catch { }
     $ui.StatusText.Text = 'Mega-Leistung aktiv: ' + ($done -join ' · ')
-    [Windows.MessageBox]::Show(("Fertig - der PC läuft jetzt auf maximale Leistung:`n`n- {0}`n`nRückgängig: Seite Tuning (Vorgabe ""Windows-Standard"") bzw. Autostart-Manager, oder der erstellte Wiederherstellungspunkt. Einige Effekte wirken nach einem Neustart." -f ($done -join "`n- ")), 'PC-Tools - Mega-Leistung', 'OK', 'Information') | Out-Null
+    [Windows.MessageBox]::Show((T (("Fertig - der PC läuft jetzt auf maximale Leistung:`n`n- {0}`n`nRückgängig: Seite Tuning (Vorgabe ""Windows-Standard"") bzw. Autostart-Manager, oder der erstellte Wiederherstellungspunkt. Einige Effekte wirken nach einem Neustart." -f ($done -join "`n- ")))), (T ('PC-Tools - Mega-Leistung')), 'OK', 'Information') | Out-Null
 }
 # ---------------------------------------------------------------- Tuning: Autostart-Manager
 $AutoSources = @(
@@ -29077,7 +29392,7 @@ function Show-Autostart {
         $cb = New-Object Windows.Controls.CheckBox; $cb.Content = $e.Name; $cb.IsChecked = $e.Enabled; $cb.FontWeight = 'SemiBold'; $cb.Tag = $e
         $cb.Add_Click({ param($sender, $ev)
             try { Set-AutostartEntry $sender.Tag ([bool]$sender.IsChecked); $ui.StatusText.Text = ('Autostart "{0}" {1}' -f $sender.Tag.Name, $(if ($sender.IsChecked) { 'aktiviert' } else { 'deaktiviert' })); Update-AutoSummary }
-            catch { [Windows.MessageBox]::Show('Nicht möglich: ' + $_.Exception.Message, 'PC-Tools') | Out-Null; $sender.IsChecked = -not $sender.IsChecked } })
+            catch { [Windows.MessageBox]::Show((T ('Nicht möglich: ' + $_.Exception.Message)), (T ('PC-Tools'))) | Out-Null; $sender.IsChecked = -not $sender.IsChecked } })
         [void]$head.Children.Add($cb)
         switch ($e.Category) {
             'Notwendig'   { [void]$head.Children.Add((New-AutoBadge 'notwendig' '#DCFCE7' '#15803D')) }
@@ -29372,7 +29687,7 @@ function Complete-UpdateCheck($m, [bool]$Quiet) {
     }
 }
 function Install-UpdateGui {
-    if ($script:Job) { [Windows.MessageBox]::Show('Bitte warten, bis die laufende Pflege fertig ist.', 'PC-Tools') | Out-Null; return }
+    if ($script:Job) { [Windows.MessageBox]::Show((T ('Bitte warten, bis die laufende Pflege fertig ist.')), (T ('PC-Tools'))) | Out-Null; return }
     if (-not $script:UpdManifest) { return }
     $ok = $false
     try { $ok = Show-UpdateProgress $script:UpdManifest $ui.Settings_UpdateSource.Text.Trim() } catch { Show-UiError ('Update fehlgeschlagen: ' + $_.Exception.Message); return }
@@ -29405,12 +29720,11 @@ function Show-FirstRunOrNews {
     try { @{ Version = [string]$AppVersion; Seen = (Get-Date).ToString('s') } | ConvertTo-Json | Set-Content -LiteralPath $marker -Encoding UTF8 } catch { }
     if (-not $last) {
         $nl = [Environment]::NewLine
-        [Windows.MessageBox]::Show(('Willkommen bei PC-Tools!' + $nl + $nl +
+        [Windows.MessageBox]::Show((T (('Willkommen bei PC-Tools!' + $nl + $nl +
             'PC-Tools ist kostenlos und quelloffen (Open Source, Apache 2.0) - von René Hütt (by RH).' + $nl + $nl +
             'Es hält Windows gepflegt, aktuell und schnell: Updates, Treiber, Aufräumen, Reparatur, Sicherheit - vieles davon mit einem Klick ("Alles automatisch" auf der Startseite).' + $nl + $nl +
             'Datenschutz: PC-Tools sendet nichts nach Hause. Keine Telemetrie, keine Nutzerdaten.' + $nl + $nl +
-            'Tipp: Keine Technik-Kenntnisse nötig - der grüne Knopf "Alles automatisch" erledigt alles von selbst.'),
-            'PC-Tools - Willkommen', 'OK', 'Information') | Out-Null
+            'Tipp: Keine Technik-Kenntnisse nötig - der grüne Knopf "Alles automatisch" erledigt alles von selbst.'))), (T ('PC-Tools - Willkommen')), 'OK', 'Information') | Out-Null
         return
     }
     if ($last -ne [string]$AppVersion) { try { Show-WhatsNew } catch { } }
@@ -29419,7 +29733,7 @@ function Show-WhatsNew {
     $news = @($ManualNews | Where-Object { $_ -match ('Version ' + [regex]::Escape($AppVersion)) })
     if (-not $news.Count) { $news = @($ManualNews | Select-Object -First 6) }
     $body = ($news | ForEach-Object { '•  ' + ($_ -replace '^Version [0-9.]+:\s*', '') }) -join [Environment]::NewLine + [Environment]::NewLine
-    [Windows.MessageBox]::Show(('Was ist neu in PC-Tools {0}:{1}{1}{2}' -f $AppVersion, [Environment]::NewLine, $body), 'PC-Tools - Neuigkeiten', 'OK', 'Information') | Out-Null
+    [Windows.MessageBox]::Show((T (('Was ist neu in PC-Tools {0}:{1}{1}{2}' -f $AppVersion, [Environment]::NewLine, $body))), (T ('PC-Tools - Neuigkeiten')), 'OK', 'Information') | Out-Null
 }
 
 # ---------------------------------------------------------------- Ninite: Programmauswahl
@@ -29551,7 +29865,7 @@ function Update-NinFilter {
 function Start-NiniteAudit {
     if ($script:NinAudit -or $script:Job) { return }
     $exe = Get-NinitePathGui
-    if (-not $exe) { [Windows.MessageBox]::Show('NinitePro.exe nicht gefunden.' + [char]10 + [char]10 + 'Programm-Updates laufen auch ohne Ninite ueber winget (kostenlos, in Windows enthalten).' + [char]10 + 'NinitePro Pro (mehr Programme, Zwischenspeicher) gibt es unter ninite.com/pro - danach den Pfad unter Updates eintragen.', 'PC-Tools', 'OK', 'Information') | Out-Null; return }
+    if (-not $exe) { [Windows.MessageBox]::Show((T ('NinitePro.exe nicht gefunden.' + [char]10 + [char]10 + 'Programm-Updates laufen auch ohne Ninite ueber winget (kostenlos, in Windows enthalten).' + [char]10 + 'NinitePro Pro (mehr Programme, Zwischenspeicher) gibt es unter ninite.com/pro - danach den Pfad unter Updates eintragen.')), (T ('PC-Tools')), 'OK', 'Information') | Out-Null; return }
     $dir = Join-Path $DataDir 'Ninite'; New-Item $dir -ItemType Directory -Force | Out-Null
     $rep = Join-Path $dir ('Ninite_Audit_{0:yyyyMMdd_HHmmss}.txt' -f (Get-Date))
     $p = Start-Process -FilePath $exe -ArgumentList @('/audit', '/silent', ('"{0}"' -f $rep)) -WindowStyle Hidden -PassThru
@@ -29764,7 +30078,7 @@ $ui.BtnProfInstall.Add_Click({ Install-SelectedProfile })
 $ui.BtnDeskScan.Add_Click({
     $window.Cursor = 'Wait'
     try { Save-PflegeConfig (Get-ConfigFromUi); Show-DeskPlan (Get-DeskPlan (Get-ConfigFromUi)) }
-    catch { [Windows.MessageBox]::Show('Analyse fehlgeschlagen: ' + $_.Exception.Message, 'PC-Tools', 'OK', 'Warning') | Out-Null }
+    catch { [Windows.MessageBox]::Show((T ('Analyse fehlgeschlagen: ' + $_.Exception.Message)), (T ('PC-Tools')), 'OK', 'Warning') | Out-Null }
     finally { $window.Cursor = $null }
 })
 $ui.BtnDeskRun.Add_Click({ Invoke-DeskCleanup })
@@ -29773,13 +30087,13 @@ $ui.BtnDeskArrPreview.Add_Click({ Show-DeskArrangePreview })
 $ui.BtnDeskFolders.Add_Click({ Invoke-DeskFolders })
 $ui.BtnDeskLayoutSave.Add_Click({
     try { $n = Save-DeskLayout; $ui.DeskArrInfo.Text = ('Anordnung von {0} Symbolen gemerkt.' -f $n) }
-    catch { [Windows.MessageBox]::Show('Merken fehlgeschlagen: ' + $_.Exception.Message, 'PC-Tools', 'OK', 'Warning') | Out-Null }
+    catch { [Windows.MessageBox]::Show((T ('Merken fehlgeschlagen: ' + $_.Exception.Message)), (T ('PC-Tools')), 'OK', 'Warning') | Out-Null }
 })
 $ui.BtnDeskLayoutLoad.Add_Click({
     try {
         $n = Invoke-GuiAutoArrangeCheck { param($allow) if ($allow) { Disable-DeskAutoArrange }; Restore-DeskLayout }
         if ($null -ne $n) { $ui.DeskArrInfo.Text = ('{0} Symbole an ihre gemerkte Position gesetzt.' -f $n) }
-    } catch { [Windows.MessageBox]::Show('Wiederherstellen fehlgeschlagen: ' + $_.Exception.Message, 'PC-Tools', 'OK', 'Warning') | Out-Null }
+    } catch { [Windows.MessageBox]::Show((T ('Wiederherstellen fehlgeschlagen: ' + $_.Exception.Message)), (T ('PC-Tools')), 'OK', 'Warning') | Out-Null }
     finally { $window.Cursor = $null }
 })
 $ui.BtnDeskArrLnk.Add_Click({
@@ -29788,7 +30102,7 @@ $ui.BtnDeskArrLnk.Add_Click({
         $f = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Desktop ordnen.lnk'
         New-PflegeCommandShortcut $f '-DeskArrange' ((Join-Path $DataDir 'PCPflege.ico') + ',0') 'Desktop-Symbole nach Kategorien anordnen (PC-Tools)'
         $ui.StatusText.Text = 'Verknüpfung erstellt: ' + $f
-    } catch { [Windows.MessageBox]::Show('Verknüpfung konnte nicht erstellt werden: ' + $_.Exception.Message, 'PC-Tools', 'OK', 'Warning') | Out-Null }
+    } catch { [Windows.MessageBox]::Show((T ('Verknüpfung konnte nicht erstellt werden: ' + $_.Exception.Message)), (T ('PC-Tools')), 'OK', 'Warning') | Out-Null }
 })
 $ui.BtnMonRefresh.Add_Click({ Build-MonitorPage })
 $ui.BtnMonSave.Add_Click({ Save-MonitorProfileGui })
@@ -29825,7 +30139,7 @@ function Save-ReadTokenGui {
     $t = $ui.GhReadToken.Password.Trim()
     if (-not $t) { return }
     $gh = Get-GitHubSource $(if ($ui.Settings_UpdateSource.Text.Trim()) { $ui.Settings_UpdateSource.Text.Trim() } else { $DefaultUpdateSource })
-    if (-not $gh) { [Windows.MessageBox]::Show('Die Update-Quelle ist kein GitHub-Repository.', 'PC-Tools') | Out-Null; return }
+    if (-not $gh) { [Windows.MessageBox]::Show((T ('Die Update-Quelle ist kein GitHub-Repository.')), (T ('PC-Tools'))) | Out-Null; return }
     $window.Cursor = 'Wait'
     try { $r = Test-GitHubToken $gh.Repo $t }
     catch { $window.Cursor = $null; $ui.GhReadStatus.Text = 'Token funktioniert nicht: ' + $_.Exception.Message + ' - ist beim Token das Repository pc-pflege ausgewählt?'; $ui.GhReadStatus.Foreground = $Brush.Red; return }
@@ -29840,7 +30154,7 @@ function Save-ReadTokenGui {
 }
 function New-SetupPackage {
     $rt = Get-ReadToken
-    if (-not $rt) { [Windows.MessageBox]::Show('Bitte zuerst einen Nur-Lesen-Token hinterlegen.', 'PC-Tools') | Out-Null; return }
+    if (-not $rt) { [Windows.MessageBox]::Show((T ('Bitte zuerst einen Nur-Lesen-Token hinterlegen.')), (T ('PC-Tools'))) | Out-Null; return }
     Add-Type -AssemblyName System.Windows.Forms
     $d = New-Object System.Windows.Forms.FolderBrowserDialog
     $d.Description = 'Wohin soll das Einrichtungspaket? (z.B. NAS-Ordner oder USB-Stick)'
@@ -29863,7 +30177,7 @@ function New-SetupPackage {
             ('Erstellt am {0:dd.MM.yyyy HH:mm} mit PC-Tools {1}' -f (Get-Date), $AppVersion))
         $ui.StatusText.Text = 'Einrichtungspaket erstellt: ' + $dir
         Start-Process explorer.exe ('"{0}"' -f $dir)
-    } catch { [Windows.MessageBox]::Show('Paket konnte nicht erstellt werden: ' + $_.Exception.Message, 'PC-Tools', 'OK', 'Warning') | Out-Null }
+    } catch { [Windows.MessageBox]::Show((T ('Paket konnte nicht erstellt werden: ' + $_.Exception.Message)), (T ('PC-Tools')), 'OK', 'Warning') | Out-Null }
 }
 $ui.BtnGhReadSave.Add_Click({ Save-ReadTokenGui })
 $ui.BtnPkgCreate.Add_Click({ New-SetupPackage })
@@ -29875,7 +30189,7 @@ function Update-GhStatus {
 $ui.BtnGhSave.Add_Click({
     $t = $ui.GhToken.Password.Trim()
     if (-not $t) { Remove-Item -LiteralPath $TokenFile -Force -ErrorAction SilentlyContinue; $ui.StatusText.Text = 'GitHub-Token entfernt.'; Update-GhStatus; return }
-    try { Save-GitHubToken $t; $ui.GhToken.Password = ''; $ui.StatusText.Text = 'GitHub-Token gespeichert.' } catch { [Windows.MessageBox]::Show('Speichern fehlgeschlagen: ' + $_.Exception.Message, 'PC-Tools') | Out-Null }
+    try { Save-GitHubToken $t; $ui.GhToken.Password = ''; $ui.StatusText.Text = 'GitHub-Token gespeichert.' } catch { [Windows.MessageBox]::Show((T ('Speichern fehlgeschlagen: ' + $_.Exception.Message)), (T ('PC-Tools'))) | Out-Null }
     Update-GhStatus
 })
 $ui.BtnGhTest.Add_Click({
@@ -29898,13 +30212,13 @@ $ui.BtnUpdBrowse.Add_Click({
 })
 $ui.BtnUpdPublish.Add_Click({
     $src = $ui.Settings_UpdateSource.Text.Trim()
-    if (-not $src) { [Windows.MessageBox]::Show('Bitte zuerst eine Update-Quelle (Ordner) eintragen.', 'PC-Tools') | Out-Null; return }
+    if (-not $src) { [Windows.MessageBox]::Show((T ('Bitte zuerst eine Update-Quelle (Ordner) eintragen.')), (T ('PC-Tools'))) | Out-Null; return }
     $old = Get-UpdateManifest $src
     if ($old -and -not (Test-NewerVersion $AppVersion $old.Version)) {
-        if ([Windows.MessageBox]::Show(('In der Quelle liegt bereits Version {0}. Trotzdem Version {1} veröffentlichen?' -f $old.Version, $AppVersion), 'PC-Tools', 'YesNo', 'Warning') -ne 'Yes') { return }
-    } elseif ([Windows.MessageBox]::Show(('Version {0} nach {1} veröffentlichen? Alle Geräte mit dieser Update-Quelle übernehmen sie dann.' -f $AppVersion, $src), 'PC-Tools', 'YesNo', 'Question') -ne 'Yes') { return }
+        if ([Windows.MessageBox]::Show((T (('In der Quelle liegt bereits Version {0}. Trotzdem Version {1} veröffentlichen?' -f $old.Version, $AppVersion))), (T ('PC-Tools')), 'YesNo', 'Warning') -ne 'Yes') { return }
+    } elseif ([Windows.MessageBox]::Show((T (('Version {0} nach {1} veröffentlichen? Alle Geräte mit dieser Update-Quelle übernehmen sie dann.' -f $AppVersion, $src))), (T ('PC-Tools')), 'YesNo', 'Question') -ne 'Yes') { return }
     try { Publish-PflegeUpdate $src ('PC-Tools ' + $AppVersion); Save-PflegeConfig (Get-ConfigFromUi); $ui.StatusText.Text = ('Version {0} veröffentlicht nach {1}' -f $AppVersion, $src); Invoke-UpdateCheck }
-    catch { [Windows.MessageBox]::Show('Veröffentlichen fehlgeschlagen: ' + $_.Exception.Message, 'PC-Tools', 'OK', 'Error') | Out-Null }
+    catch { [Windows.MessageBox]::Show((T ('Veröffentlichen fehlgeschlagen: ' + $_.Exception.Message)), (T ('PC-Tools')), 'OK', 'Error') | Out-Null }
 })
 Update-GhStatus
 $window.Add_ContentRendered({ if ($ui.Settings_UpdateAuto.IsChecked) { Invoke-UpdateCheck -Quiet } else { Invoke-UpdateCheck } })
@@ -29912,7 +30226,7 @@ $ui.BtnDeskUndo.Add_Click({ Undo-DeskCleanup })
 $ui.BtnDeskOpen.Add_Click({
     $d = (Get-ConfigFromUi).Desk
     $p = Join-Path ([Environment]::GetFolderPath('Desktop')) $(if ([string]$d.OldFolder) { [string]$d.OldFolder } else { '_Alt' })
-    if (Test-Path -LiteralPath $p) { Start-Process explorer.exe $p } else { [Windows.MessageBox]::Show('Der Alt-Ordner existiert noch nicht.', 'PC-Tools') | Out-Null }
+    if (Test-Path -LiteralPath $p) { Start-Process explorer.exe $p } else { [Windows.MessageBox]::Show((T ('Der Alt-Ordner existiert noch nicht.')), (T ('PC-Tools'))) | Out-Null }
 })
 $ui.DeskAll.Add_Click({ foreach ($r in $script:DeskRows) { $r.Check.IsChecked = $ui.DeskAll.IsChecked }; Update-DeskInfo })
 foreach ($pair in @(@('BtnLnkDesktop', 'Desktop'), @('BtnLnkPublic', 'Public'), @('BtnLnkStart', 'StartMenu'))) {
@@ -29920,7 +30234,7 @@ foreach ($pair in @(@('BtnLnkDesktop', 'Desktop'), @('BtnLnkPublic', 'Public'), 
     $btn.Add_Click({
         param($sender, $e)
         try { $p = New-PflegeShortcut ([string]$sender.Tag); $ui.StatusText.Text = 'Verknüpfung erstellt: ' + $p }
-        catch { [Windows.MessageBox]::Show('Verknüpfung konnte nicht erstellt werden: ' + $_.Exception.Message, 'PC-Tools', 'OK', 'Warning') | Out-Null }
+        catch { [Windows.MessageBox]::Show((T ('Verknüpfung konnte nicht erstellt werden: ' + $_.Exception.Message)), (T ('PC-Tools')), 'OK', 'Warning') | Out-Null }
         Update-ShortcutStatus
     })
 }
@@ -29929,7 +30243,7 @@ $ui.BtnAvDefender.Add_Click({
     try {
         foreach ($p in (Get-AvExclusionPaths)) { Add-MpPreference -ExclusionPath $p -ErrorAction Stop }
         $ui.StatusText.Text = 'Defender-Ausnahmen eingetragen: ' + ((Get-AvExclusionPaths) -join ', ')
-    } catch { [Windows.MessageBox]::Show('Defender-Ausnahmen konnten nicht eingetragen werden (evtl. ist ein anderer Virenscanner aktiv): ' + $_.Exception.Message, 'PC-Tools', 'OK', 'Warning') | Out-Null }
+    } catch { [Windows.MessageBox]::Show((T ('Defender-Ausnahmen konnten nicht eingetragen werden (evtl. ist ein anderer Virenscanner aktiv): ' + $_.Exception.Message)), (T ('PC-Tools')), 'OK', 'Warning') | Out-Null }
 })
 $ui.BtnAvOpen.Add_Click({
     $av = Get-AvProducts | Where-Object { -not $_.IsMs -and $_.Exe } | Select-Object -First 1
@@ -29943,7 +30257,7 @@ $ui.BtnLnkRemove.Add_Click({
 })
 $ui.BtnApplyDays.Add_Click({
     $d = 0
-    if (-not [int]::TryParse($ui.Settings_CleanDays.Text.Trim(), [ref]$d) -or $d -lt 0) { [Windows.MessageBox]::Show('Bitte eine Zahl eingeben.', 'PC-Tools') | Out-Null; return }
+    if (-not [int]::TryParse($ui.Settings_CleanDays.Text.Trim(), [ref]$d) -or $d -lt 0) { [Windows.MessageBox]::Show((T ('Bitte eine Zahl eingeben.')), (T ('PC-Tools'))) | Out-Null; return }
     foreach ($n in 'Clean_UserTempDays', 'Clean_WinTempDays', 'Clean_RecycleBinDays', 'Clean_WERDays', 'Clean_OldLogsDays') { $window.FindName($n).Text = [string]$d }
     $ui.StatusText.Text = ('Alter von {0} Tag(en) auf alle Bereinigungen übertragen - bitte speichern.' -f $d)
 })
@@ -29963,10 +30277,10 @@ $ui.BtnCfgImport.Add_Click({
         Set-UiFromConfig (Read-PflegeConfig)
         $null = Save-All
         $ui.StatusText.Text = 'Konfiguration importiert und gespeichert.'
-    } catch { [Windows.MessageBox]::Show('Import fehlgeschlagen: ' + $_.Exception.Message, 'PC-Tools', 'OK', 'Error') | Out-Null }
+    } catch { [Windows.MessageBox]::Show((T ('Import fehlgeschlagen: ' + $_.Exception.Message)), (T ('PC-Tools')), 'OK', 'Error') | Out-Null }
 })
 $ui.BtnCfgReset.Add_Click({
-    if ([Windows.MessageBox]::Show('Alle Einstellungen auf die empfohlenen Standardwerte zurücksetzen? Pfade und Ausnahmen bleiben erhalten.', 'PC-Tools', 'YesNo', 'Question') -ne 'Yes') { return }
+    if ([Windows.MessageBox]::Show((T ('Alle Einstellungen auf die empfohlenen Standardwerte zurücksetzen? Pfade und Ausnahmen bleiben erhalten.')), (T ('PC-Tools')), 'YesNo', 'Question') -ne 'Yes') { return }
     $keep = Get-ConfigFromUi
     $def = Get-DefaultConfig
     foreach ($n in 'NinitePath', 'OEMToolPath', 'NiniteExclude', 'WingetExclude') { $def.Update.$n = $keep.Update.$n }
@@ -29974,7 +30288,7 @@ $ui.BtnCfgReset.Add_Click({
     $null = Save-All
 })
 $ui.BtnTaskRemove.Add_Click({
-    if ([Windows.MessageBox]::Show('Geplante Aufgabe "PC-Tools" entfernen? Die automatische Pflege wird dann ausgeschaltet.', 'PC-Tools', 'YesNo', 'Question') -ne 'Yes') { return }
+    if ([Windows.MessageBox]::Show((T ('Geplante Aufgabe "PC-Tools" entfernen? Die automatische Pflege wird dann ausgeschaltet.')), (T ('PC-Tools')), 'YesNo', 'Question') -ne 'Yes') { return }
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
     $window.FindName('Schedule_Enabled').IsChecked = $false
     Save-PflegeConfig (Get-ConfigFromUi)
@@ -29984,12 +30298,12 @@ $ui.BtnTaskRemove.Add_Click({
 $ui.BtnNinInstall.Add_Click({
     if ((Get-NinSrcKey) -ne 'cat') {
         $rows = @($ui.NinOnlineGrid.SelectedItems | Where-Object { $_ -and $_.Id })
-        if (-not $rows.Count) { [Windows.MessageBox]::Show('Bitte in der Liste Programme markieren (Strg oder Umschalt für mehrere).', 'PC-Tools', 'OK', 'Information') | Out-Null; return }
+        if (-not $rows.Count) { [Windows.MessageBox]::Show((T ('Bitte in der Liste Programme markieren (Strg oder Umschalt für mehrere).')), (T ('PC-Tools')), 'OK', 'Information') | Out-Null; return }
         $wg  = @($rows | Where-Object { $_.Source -eq 'winget' } | ForEach-Object { [string]$_.Id } | Select-Object -Unique)
         $cho = @($rows | Where-Object { $_.Source -eq 'Chocolatey' } | ForEach-Object { [string]$_.Id } | Select-Object -Unique)
         $nin = @($rows | Where-Object { $_.Source -eq 'Ninite' } | ForEach-Object { [string]$_.Name } | Select-Object -Unique)
         $names = @($rows | ForEach-Object { '  - {0} ({1})' -f $_.Name, $_.Source })
-        $r = [Windows.MessageBox]::Show(("Folgende {0} Programm(e) installieren?`n`n{1}`n`nHinweis: Falls eine Quelle ein Programm nicht hat, übernimmt die andere automatisch." -f $rows.Count, ($names -join "`n")), 'PC-Tools - Installieren', 'YesNo', 'Question')
+        $r = [Windows.MessageBox]::Show((T (("Folgende {0} Programm(e) installieren?`n`n{1}`n`nHinweis: Falls eine Quelle ein Programm nicht hat, übernimmt die andere automatisch." -f $rows.Count, ($names -join "`n")))), (T ('PC-Tools - Installieren')), 'YesNo', 'Question')
         if ($r -ne 'Yes') { return }
         $parts = @(); if ($nin.Count) { $parts += 'NiniteInstall' }; if ($wg.Count) { $parts += 'WingetInstall' }; if ($cho.Count) { $parts += 'ChocoInstall' }
         if (-not $parts.Count) { return }
@@ -29997,10 +30311,10 @@ $ui.BtnNinInstall.Add_Click({
         return
     }
     $sel = @($script:NinApps | Where-Object { $_.Check.IsChecked } | ForEach-Object { $_.Name })
-    if ($script:NinAudit) { [Windows.MessageBox]::Show('Die Prüfung der installierten Programme läuft noch - bitte kurz warten.', 'PC-Tools', 'OK', 'Information') | Out-Null; return }
-    if (-not $sel.Count) { [Windows.MessageBox]::Show('Bitte zuerst Programme auswählen.', 'PC-Tools', 'OK', 'Information') | Out-Null; return }
-    if (-not (Get-NinitePathGui)) { [Windows.MessageBox]::Show('NinitePro.exe nicht gefunden.' + [char]10 + [char]10 + 'Tipp: Oben bei "Quelle" auf "Online: alle Quellen" umschalten - dann kannst du dieselben Programme kostenlos über winget und Chocolatey installieren.' + [char]10 + [char]10 + 'NinitePro Pro (mehr Programme, Zwischenspeicher) gibt es unter ninite.com/pro - danach den Pfad unter Updates eintragen.', 'PC-Tools', 'OK', 'Information') | Out-Null; return }
-    $r = [Windows.MessageBox]::Show(("Folgende {0} Programm(e) installieren?`n`n{1}" -f $sel.Count, ($sel -join "`n")), 'PC-Tools - Installieren', 'YesNo', 'Question')
+    if ($script:NinAudit) { [Windows.MessageBox]::Show((T ('Die Prüfung der installierten Programme läuft noch - bitte kurz warten.')), (T ('PC-Tools')), 'OK', 'Information') | Out-Null; return }
+    if (-not $sel.Count) { [Windows.MessageBox]::Show((T ('Bitte zuerst Programme auswählen.')), (T ('PC-Tools')), 'OK', 'Information') | Out-Null; return }
+    if (-not (Get-NinitePathGui)) { [Windows.MessageBox]::Show((T ('NinitePro.exe nicht gefunden.' + [char]10 + [char]10 + 'Tipp: Oben bei "Quelle" auf "Online: alle Quellen" umschalten - dann kannst du dieselben Programme kostenlos über winget und Chocolatey installieren.' + [char]10 + [char]10 + 'NinitePro Pro (mehr Programme, Zwischenspeicher) gibt es unter ninite.com/pro - danach den Pfad unter Updates eintragen.')), (T ('PC-Tools')), 'OK', 'Information') | Out-Null; return }
+    $r = [Windows.MessageBox]::Show((T (("Folgende {0} Programm(e) installieren?`n`n{1}" -f $sel.Count, ($sel -join "`n")))), (T ('PC-Tools - Installieren')), 'YesNo', 'Question')
     if ($r -eq 'Yes') { Start-Run -Parts 'NiniteInstall' -Apps $sel }
 })
 $ui.BtnBrowseNinite.Add_Click({
@@ -30022,7 +30336,7 @@ $window.Add_Closing({
     if ($script:Restarting) { return }
     if ($script:RebootLater -and -not $script:Job) { if ((Confirm-Ui ("Es steht noch ein Neustart aus:`n{0}`n`nJetzt neu starten?" -f $script:RebootLater))) { & shutdown.exe /r /t 10 /c 'PC-Tools: Neustart' | Out-Null } }
     if ($script:Job) {
-        $r = [Windows.MessageBox]::Show("Die Pflege läuft noch.`n`nJa = im Hintergrund weiterlaufen lassen und Fenster schließen`nNein = Pflege abbrechen und schließen`nAbbrechen = Fenster offen lassen", 'PC-Tools', 'YesNoCancel', 'Question')
+        $r = [Windows.MessageBox]::Show((T ("Die Pflege läuft noch.`n`nJa = im Hintergrund weiterlaufen lassen und Fenster schließen`nNein = Pflege abbrechen und schließen`nAbbrechen = Fenster offen lassen")), (T ('PC-Tools')), 'YesNoCancel', 'Question')
         if ($r -eq 'Cancel') { $e.Cancel = $true }
         elseif ($r -eq 'No') { New-Item -Path $script:Job.Cancel -ItemType File -Force | Out-Null }
     }
@@ -30514,7 +30828,7 @@ $ui.BtnLicToVault.Add_Click({
     $n = 0
     if ($w.Installed -and -not $w.InstalledNote) { Add-LicVaultItem ('Windows ' + $w.Edition) $w.Installed ($w.Kind + ', von ' + $env:COMPUTERNAME); $n++ }
     if ($w.Firmware) { Add-LicVaultItem ('Windows (BIOS) ' + $w.FirmwareDesc) $w.Firmware ('OEM-Schlüssel aus dem BIOS von ' + $env:COMPUTERNAME + ' - gilt nur für dieses Gerät'); $n++ }
-    if (-not $n) { [Windows.MessageBox]::Show('Diese Windows-Lizenz ist digital (an Hardware bzw. Microsoft-Konto gebunden) - es gibt keinen Schlüssel zum Sichern. Wichtig ist, dass dein Microsoft-Konto verknüpft ist (Knopf daneben).', 'PC-Tools', 'OK', 'Information') | Out-Null }
+    if (-not $n) { [Windows.MessageBox]::Show((T ('Diese Windows-Lizenz ist digital (an Hardware bzw. Microsoft-Konto gebunden) - es gibt keinen Schlüssel zum Sichern. Wichtig ist, dass dein Microsoft-Konto verknüpft ist (Knopf daneben).')), (T ('PC-Tools')), 'OK', 'Information') | Out-Null }
 })
 $ui.BtnLicActivation.Add_Click({ Start-Process 'ms-settings:activation' })
 $ui.BtnLicAccount.Add_Click({ Start-Process 'https://account.microsoft.com/devices' })
@@ -30586,7 +30900,7 @@ $ui.BtnLicVExport.Add_Click({
         $j = ConvertTo-Json -InputObject @($script:LicVault) -Depth 4 -Compress
         [IO.File]::WriteAllBytes($d.FileName, (Protect-WithPassword ([Text.Encoding]::UTF8.GetBytes($j)) $p))
         $ui.LicVPwd.Password = ''
-        [Windows.MessageBox]::Show(("{0} Einträge verschlüsselt exportiert:`n{1}`n`nAuf dem neuen PC: PC-Tools > Lizenzen > Import, gleiches Kennwort eingeben. Das Kennwort NICHT zusammen mit der Datei aufbewahren." -f @($script:LicVault).Count, $d.FileName), 'PC-Tools', 'OK', 'Information') | Out-Null
+        [Windows.MessageBox]::Show((T (("{0} Einträge verschlüsselt exportiert:`n{1}`n`nAuf dem neuen PC: PC-Tools > Lizenzen > Import, gleiches Kennwort eingeben. Das Kennwort NICHT zusammen mit der Datei aufbewahren." -f @($script:LicVault).Count, $d.FileName))), (T ('PC-Tools')), 'OK', 'Information') | Out-Null
     } catch { Show-UiError ('Export fehlgeschlagen: ' + $_.Exception.Message) }
 })
 $ui.BtnLicVImport.Add_Click({
@@ -30601,7 +30915,7 @@ $ui.BtnLicVImport.Add_Click({
         $all = @($script:LicVault); $new = 0
         foreach ($i in $items) { if (-not @($all | Where-Object { $_.Name -eq $i.Name -and [string]$_.Key -eq [string]$i.Key -and [string]$_.FileName -eq [string]$i.FileName }).Count) { $all += $i; $new++ } }
         Save-LicVaultRows $all; $ui.LicVPwd.Password = ''
-        [Windows.MessageBox]::Show(("{0} Einträge gelesen, {1} neu im Tresor.`n`nWindows-Schlüssel: oben eintragen und aktivieren. Lizenzdateien: Eintrag wählen > ""Datei speichern unter"" (in den Programmordner)." -f $items.Count, $new), 'PC-Tools', 'OK', 'Information') | Out-Null
+        [Windows.MessageBox]::Show((T (("{0} Einträge gelesen, {1} neu im Tresor.`n`nWindows-Schlüssel: oben eintragen und aktivieren. Lizenzdateien: Eintrag wählen > ""Datei speichern unter"" (in den Programmordner)." -f $items.Count, $new))), (T ('PC-Tools')), 'OK', 'Information') | Out-Null
     } catch { Show-UiError $_.Exception.Message }
 })
 $ui.BtnLicReport.Add_Click({ Export-LicReport })
@@ -30718,7 +31032,7 @@ function Start-PdfReport {
         if ($err) { Show-UiError ('Bericht fehlgeschlagen: ' + $err.Message); $ui.StatusText.Text = 'Bericht fehlgeschlagen.'; return }
         $f = [string](@($r | Where-Object { $_ })[-1])
         $ui.StatusText.Text = 'PC-Bericht gespeichert: ' + $f
-        if ($f -match '\.html$' -and $script:PdfTarget -match '\.pdf$') { [Windows.MessageBox]::Show('Microsoft Edge wurde nicht gefunden - der Bericht wurde als Webseite gespeichert. Zum PDF: öffnen und mit "Drucken > Microsoft Print to PDF" speichern.', 'PC-Tools', 'OK', 'Information') | Out-Null }
+        if ($f -match '\.html$' -and $script:PdfTarget -match '\.pdf$') { [Windows.MessageBox]::Show((T ('Microsoft Edge wurde nicht gefunden - der Bericht wurde als Webseite gespeichert. Zum PDF: öffnen und mit "Drucken > Microsoft Print to PDF" speichern.')), (T ('PC-Tools')), 'OK', 'Information') | Out-Null }
         try { Start-Process -FilePath $f } catch { }
     }
 }
@@ -30765,12 +31079,12 @@ function Start-Carefree {
     try { Update-Security } catch { }; try { Update-Ampel } catch { }
     $ui.CarefreeState.Text = 'Sorgenfrei-Modus eingerichtet am ' + (Get-Date).ToString('dd.MM.yyyy')
     try { Set-Content -LiteralPath (Join-Path $DataDir 'sorgenfrei.txt') -Value (Get-Date).ToString('o') } catch { }
-    [Windows.MessageBox]::Show(("Sorgenfrei-Modus eingerichtet:`n`n{0}{1}" -f (($done | ForEach-Object { '  ✓ ' + $_ }) -join "`n"), $(if ($skip) { "`n`nNicht erledigt:`n" + (($skip | ForEach-Object { '  - ' + $_ }) -join "`n") } else { '' })), 'PC-Tools', 'OK', 'Information') | Out-Null
+    [Windows.MessageBox]::Show((T (("Sorgenfrei-Modus eingerichtet:`n`n{0}{1}" -f (($done | ForEach-Object { '  ✓ ' + $_ }) -join "`n"), $(if ($skip) { "`n`nNicht erledigt:`n" + (($skip | ForEach-Object { '  - ' + $_ }) -join "`n") } else { '' })))), (T ('PC-Tools')), 'OK', 'Information') | Out-Null
 }
 
 # ---------------------------------------------------------------- Suche (Strg+K)
 $SearchIndex = [System.Collections.Generic.List[object]]::new()
-function Add-SearchEntry([string]$Title, [string]$Where, [string]$Keys, [string]$Glyph, [scriptblock]$Do) { $SearchIndex.Add([pscustomobject]@{ Title = $Title; Where = $Where; Keys = ($Title + ' ' + $Where + ' ' + $Keys).ToLower(); Glyph = $Glyph; Do = $Do }) }
+function Add-SearchEntry([string]$Title, [string]$Where, [string]$Keys, [string]$Glyph, [scriptblock]$Do) { $SearchIndex.Add([pscustomobject]@{ Title = $Title; Where = $Where; Keys = ($Title + ' ' + $Where + ' ' + $Keys + ' ' + (T $Title) + ' ' + (T $Where)).ToLower(); Glyph = $Glyph; Do = $Do }) }
 foreach ($t in @($ui.Tabs.Items)) {
     if ($t.Tag -eq 'H' -or -not $t.Name) { continue }
     $sp = $t.Header; $tb = @($sp.Children); if ($tb.Count -lt 2) { continue }
@@ -31397,7 +31711,7 @@ $ui.BtnUaWrite.Add_Click({
     try {
         $files = Write-UnattendStick $i.Tag $o $spec
         $ui.UaInfo.Text = 'Fertig. Geschrieben: ' + ($files -join ', ') + '. Vom Stick starten (Boot-Menü: F12 bei Lenovo/Dell, F9 bei HP) - der Rest läuft allein.'
-        [Windows.MessageBox]::Show(("Der Stick ist bereit.`n`nSo geht es weiter:`n1. Stick in den neuen PC, vom Stick starten (Boot-Menü F12/F9/F11/Esc).`n2. Bei der Frage nach der Festplatte die richtige wählen (alte Partitionen ggf. löschen).`n3. Den Rest macht Windows allein - nach dem ersten Anmelden richtet sich PC-Tools ein und startet den Einrichtungs-Assistenten.`n`nAchtung: Der Stick installiert auf jedem PC, von dem gestartet wird, ohne weitere Fragen - vorsichtig aufbewahren."), 'PC-Tools', 'OK', 'Information') | Out-Null
+        [Windows.MessageBox]::Show((T (("Der Stick ist bereit.`n`nSo geht es weiter:`n1. Stick in den neuen PC, vom Stick starten (Boot-Menü F12/F9/F11/Esc).`n2. Bei der Frage nach der Festplatte die richtige wählen (alte Partitionen ggf. löschen).`n3. Den Rest macht Windows allein - nach dem ersten Anmelden richtet sich PC-Tools ein und startet den Einrichtungs-Assistenten.`n`nAchtung: Der Stick installiert auf jedem PC, von dem gestartet wird, ohne weitere Fragen - vorsichtig aufbewahren."))), (T ('PC-Tools')), 'OK', 'Information') | Out-Null
     } catch { Show-UiError ('Schreiben fehlgeschlagen: ' + $_.Exception.Message) }
 })
 $ui.BtnUaSave.Add_Click({
@@ -31570,7 +31884,7 @@ function Start-MicTest {
 function Start-SpeakerTest {
     Set-ChkResult 'Speaker' 'run' 'Ton links, rechts, beide ...'
     foreach ($ch in 1, 2, 0) { try { $sp = New-Object Media.SoundPlayer (New-ToneWav $ch $(switch ($ch) { 1 { 440 } 2 { 554 } default { 659 } })); $sp.PlaySync(); Start-Sleep -Milliseconds 250 } catch { } }
-    $r = [Windows.MessageBox]::Show("Kam der erste Ton nur links, der zweite nur rechts und der dritte aus beiden - ohne Kratzen?`n`nJa = in Ordnung, Nein = Fehler, Abbrechen = nochmal", 'PC-Tools - Lautsprecher', 'YesNoCancel', 'Question')
+    $r = [Windows.MessageBox]::Show((T ("Kam der erste Ton nur links, der zweite nur rechts und der dritte aus beiden - ohne Kratzen?`n`nJa = in Ordnung, Nein = Fehler, Abbrechen = nochmal")), (T ('PC-Tools - Lautsprecher')), 'YesNoCancel', 'Question')
     if ($r -eq 'Yes') { Set-ChkResult 'Speaker' 'ok' 'links, rechts und beide in Ordnung' } elseif ($r -eq 'No') { Set-ChkResult 'Speaker' 'bad' 'Ton fehlt, falsche Seite oder verzerrt' } else { Start-SpeakerTest }
 }
 function Get-UsbDisks { @(Get-CimInstance Win32_DiskDrive -Filter "InterfaceType='USB'" -ErrorAction SilentlyContinue | ForEach-Object { [pscustomobject]@{ Id = [string]$_.PNPDeviceID; Name = ('{0} ({1:N0} GB)' -f $_.Model, ($_.Size / 1GB)) } }) }
@@ -31825,7 +32139,7 @@ $ui.BtnNdAdd.Add_Click({
 })
 $ui.BtnNdOpen.Add_Click({ $r = $ui.NdGrid.SelectedItem; if ($r) { Start-Process explorer.exe $(if (Test-Path ($r.Letter + '\')) { $r.Letter + '\' } else { $r.Path }) } })
 $ui.BtnNdDel.Add_Click({ $r = $ui.NdGrid.SelectedItem; if (-not $r) { return }; if (Confirm-Ui ('Netzlaufwerk {0} ({1}) trennen?' -f $r.Letter, $r.Path)) { $null = & net.exe use $r.Letter /delete /y 2>&1; Remove-Item ('HKCU:\Network\' + $r.Letter.TrimEnd(':')) -Recurse -Force -ErrorAction SilentlyContinue; Update-NetDrives } })
-$ui.BtnNdLinked.Add_Click({ try { Set-PReg 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' 'EnableLinkedConnections' 1; [Windows.MessageBox]::Show('Eingeschaltet. Nach dem nächsten Neustart sehen auch Programme mit Administratorrechten (z.B. Installer) die Netzlaufwerke.', 'PC-Tools', 'OK', 'Information') | Out-Null } catch { Show-UiError $_.Exception.Message } })
+$ui.BtnNdLinked.Add_Click({ try { Set-PReg 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' 'EnableLinkedConnections' 1; [Windows.MessageBox]::Show((T ('Eingeschaltet. Nach dem nächsten Neustart sehen auch Programme mit Administratorrechten (z.B. Installer) die Netzlaufwerke.')), (T ('PC-Tools')), 'OK', 'Information') | Out-Null } catch { Show-UiError $_.Exception.Message } })
 $ui.BtnAccKeyDir.Add_Click({ Select-FolderInto $ui.AccKeyDir })
 $ui.BtnAccBlOn.Add_Click({ if (Confirm-Ui ("BitLocker für {0} einschalten?`n`nDer Wiederherstellungsschlüssel wird unter {1}\BitLocker-Schluessel{2} gespeichert (mit Hinweis-Datei zum Sichern). Die Verschlüsselung läuft im Hintergrund (PC bleibt nutzbar).`n`nWICHTIG: Den Schlüssel danach zusätzlich außerhalb des PCs sichern." -f $env:SystemDrive, $DataDir, $(if ($ui.AccKeyDir.Text.Trim()) { ' und in ' + $ui.AccKeyDir.Text.Trim() } else { '' }))) { Start-Run -Parts @('BitLockerSetup') -Job @{ KeyDir = $ui.AccKeyDir.Text.Trim() } } })
 $ui.BtnAccBlVault.Add_Click({
@@ -31994,7 +32308,7 @@ actions:
 mode: single
 "@
     Set-Clipboard -Value $y
-    [Windows.MessageBox]::Show(("In die Zwischenablage kopiert - in Home Assistant unter Einstellungen > Automatisierungen > neu > YAML einfügen:`n`n" + $y), 'PC-Tools - Beispiel', 'OK', 'Information') | Out-Null
+    [Windows.MessageBox]::Show((T (("In die Zwischenablage kopiert - in Home Assistant unter Einstellungen > Automatisierungen > neu > YAML einfügen:`n`n" + $y))), (T ('PC-Tools - Beispiel')), 'OK', 'Information') | Out-Null
 })
 $ui.Tabs.Add_SelectionChanged({ param($s, $e) if ($e.OriginalSource -eq $s -and $s.SelectedItem -eq $ui.TabFleet) { try { Update-RemPage } catch { } } })
 
@@ -32189,8 +32503,8 @@ function Invoke-PrnFix($Row) {
         'Rpc11b'  { if (Confirm-Ui 'Diese Notlösung senkt die Sicherheit (PrintNightmare-Schutz). Nur auf dem PC setzen, der den Drucker freigibt, und nur wenn Updates nicht helfen. Wirklich?' 'Warning') { Set-PReg 'HKLM:\SYSTEM\CurrentControlSet\Control\Print' 'RpcAuthnLevelPrivacyEnabled' 0; Restart-Service Spooler -Force } }
         'WuDriver' { Start-Run -Parts @('WUDrivers') -Job @{ DriverIds = @() } }
         'Driver'  { $ui.PrnName.Text = $Row.Arg; [void]$ui.PrnDriver.Focus() }
-        'NewIp'   { $script:PrnFixTarget = $Row.Arg; $ui.BtnPrnScan.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.Button]::ClickEvent))); [Windows.MessageBox]::Show('Die Suche läuft. Danach den Drucker in der Liste "gefunden" doppelt anklicken - PC-Tools stellt den vorhandenen Drucker auf die neue Adresse um.', 'PC-Tools', 'OK', 'Information') | Out-Null }
-        'Recreate' { $p = Get-Printer -Name $Row.Arg; $ui.PrnName.Text = $p.Name + ' (TCP/IP)'; $ui.PrnDriver.Text = $p.DriverName; [Windows.MessageBox]::Show('Name und Treiber sind unten eingetragen. Jetzt "Im Netz suchen", Drucker wählen und "Drucker einrichten" - danach den alten WSD-Drucker entfernen.', 'PC-Tools', 'OK', 'Information') | Out-Null }
+        'NewIp'   { $script:PrnFixTarget = $Row.Arg; $ui.BtnPrnScan.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.Button]::ClickEvent))); [Windows.MessageBox]::Show((T ('Die Suche läuft. Danach den Drucker in der Liste "gefunden" doppelt anklicken - PC-Tools stellt den vorhandenen Drucker auf die neue Adresse um.')), (T ('PC-Tools')), 'OK', 'Information') | Out-Null }
+        'Recreate' { $p = Get-Printer -Name $Row.Arg; $ui.PrnName.Text = $p.Name + ' (TCP/IP)'; $ui.PrnDriver.Text = $p.DriverName; [Windows.MessageBox]::Show((T ('Name und Treiber sind unten eingetragen. Jetzt "Im Netz suchen", Drucker wählen und "Drucker einrichten" - danach den alten WSD-Drucker entfernen.')), (T ('PC-Tools')), 'OK', 'Information') | Out-Null }
     }
 }
 function Start-PrnDiag {
@@ -32238,7 +32552,7 @@ $ui.PrnFound.Add_MouseDoubleClick({
 $ui.BtnPrnUsb.Add_Click({
     $d = @(Get-PnpDevice -Class Printer, Image -ErrorAction SilentlyContinue | Where-Object { $_.Present -and $_.InstanceId -match '^USB|^SWD\\PRINTENUM' -or ($_.Present -and $_.InstanceId -match 'USBPRINT') })
     if (-not $d.Count) { Show-UiError 'Kein Drucker per USB erkannt. Kabel und Gerät prüfen - manche Geräte brauchen erst das Herstellerpaket.'; return }
-    [Windows.MessageBox]::Show(('Per USB erkannt:' + "`n`n" + (($d | ForEach-Object { '{0}  -  {1}' -f $_.FriendlyName, $(if ($_.Status -eq 'OK') { 'Treiber in Ordnung' } else { 'ohne Treiber (' + $_.Status + ')' }) }) -join "`n")), 'PC-Tools', 'OK', 'Information') | Out-Null
+    [Windows.MessageBox]::Show((T (('Per USB erkannt:' + "`n`n" + (($d | ForEach-Object { '{0}  -  {1}' -f $_.FriendlyName, $(if ($_.Status -eq 'OK') { 'Treiber in Ordnung' } else { 'ohne Treiber (' + $_.Status + ')' }) }) -join "`n")))), (T ('PC-Tools')), 'OK', 'Information') | Out-Null
     $m = ($d | Select-Object -First 1).FriendlyName; Set-PrnTarget '' $m $m
 })
 $ui.BtnPrnVendorPage.Add_Click({
@@ -32273,7 +32587,7 @@ $ui.BtnPrnPackage.Add_Click({
             '\.(exe|msi)$' {
                 $sig = Get-AuthenticodeSignature -FilePath $f
                 if ($sig.Status -ne 'Valid' -and -not (Confirm-Ui ('Das Paket ist nicht gültig signiert ({0}). Trotzdem ausführen?' -f $sig.Status) 'Warning')) { return }
-                [Windows.MessageBox]::Show(('Der Installer des Herstellers ({0}) startet jetzt. Bei der Frage nach der Verbindung "Netzwerk" bzw. "USB" wählen - das Gerät wird dabei meist automatisch gefunden. Danach hier "Neu einlesen".' -f ($sig.SignerCertificate.Subject -replace '^CN=([^,]+).*$', '$1')), 'PC-Tools', 'OK', 'Information') | Out-Null
+                [Windows.MessageBox]::Show((T (('Der Installer des Herstellers ({0}) startet jetzt. Bei der Frage nach der Verbindung "Netzwerk" bzw. "USB" wählen - das Gerät wird dabei meist automatisch gefunden. Danach hier "Neu einlesen".' -f ($sig.SignerCertificate.Subject -replace '^CN=([^,]+).*$', '$1')))), (T ('PC-Tools')), 'OK', 'Information') | Out-Null
                 $null = Invoke-UiWait { param($f) $p = if ($f -match '\.msi$') { Start-Process msiexec.exe -ArgumentList ('/i "{0}"' -f $f) -PassThru } else { Start-Process -FilePath $f -PassThru }; [void]$p.WaitForExit(3600000); 'ok' } @($f) @() 3700 'Der Hersteller-Installer läuft ... (PC-Tools wartet, bis er fertig ist)'
             }
             '\.zip$' { $o = [string]@(Invoke-UiWait { param($f) $x = Join-Path $env:TEMP ('PCPflege-Drucker-' + (Get-Random)); Expand-Archive -LiteralPath $f -DestinationPath $x -Force; $o = (& pnputil.exe /add-driver (Join-Path $x '*.inf') /subdirs /install 2>&1) -join "`n"; Remove-Item $x -Recurse -Force -ErrorAction SilentlyContinue; $o } @($f) @() 600 'Treiber wird installiert ...')[-1]; $ui.StatusText.Text = 'pnputil: ' + (($o -split "`n") | Select-Object -Last 3) -join ' ' }
@@ -32284,7 +32598,7 @@ $ui.BtnPrnPackage.Add_Click({
     try { $null = Invoke-UiWait { param($before) foreach ($n in @(Get-CimInstance Win32_PnPSignedDriver -Filter "DeviceClass='PRINTER'" -ErrorAction SilentlyContinue | ForEach-Object { $_.DeviceName } | Where-Object { $_ } | Sort-Object -Unique)) { if ($before -notcontains $n) { try { Add-PrinterDriver -Name $n -ErrorAction Stop } catch { } } }; 'ok' } @(, $before) @() 300 'Neue Druckertreiber werden registriert ...' } catch { }
     Update-Printers
     $new = @(Get-PrinterDriver -ErrorAction SilentlyContinue | ForEach-Object { $_.Name } | Where-Object { $before -notcontains $_ })
-    if ($new.Count) { $ui.PrnDriver.Text = $new[0]; [Windows.MessageBox]::Show(('Neue Druckertreiber: ' + ($new -join ', ') + "`n`nDer erste ist unten ausgewählt - jetzt ""Drucker einrichten"", falls der Hersteller-Installer das Gerät nicht schon selbst eingerichtet hat."), 'PC-Tools', 'OK', 'Information') | Out-Null }
+    if ($new.Count) { $ui.PrnDriver.Text = $new[0]; [Windows.MessageBox]::Show((T (('Neue Druckertreiber: ' + ($new -join ', ') + "`n`nDer erste ist unten ausgewählt - jetzt ""Drucker einrichten"", falls der Hersteller-Installer das Gerät nicht schon selbst eingerichtet hat."))), (T ('PC-Tools')), 'OK', 'Information') | Out-Null }
 })
 $ui.BtnPrnWuDrv.Add_Click({ if (Confirm-Ui 'Windows Update nach Drucker- und Scannertreibern durchsuchen und installieren? Das nutzt den normalen Treiberlauf (alle Geräte).') { Start-Run -Parts @('WUDrivers') -Job @{ DriverIds = @() } } })
 $ui.BtnPrnAdd.Add_Click({
@@ -32636,7 +32950,7 @@ $ui.BtnDrvFixDev.Add_Click({
         $ui.BtnDrvFixDev.IsEnabled = $true
         if ($err) { Show-UiError ('Reparatur: ' + $err.Message); return }
         $lines = @($x | ForEach-Object { [string]$_ }); $ok = $lines -contains '#FIXED'
-        [Windows.MessageBox]::Show((($lines | Where-Object { $_ -ne '#FIXED' }) -join "`n"), ('PC-Tools - ' + $script:DrvFixName), 'OK', $(if ($ok) { 'Information' } else { 'Warning' })) | Out-Null
+        [Windows.MessageBox]::Show((T ((($lines | Where-Object { $_ -ne '#FIXED' }) -join "`n"))), (T (('PC-Tools - ' + $script:DrvFixName))), 'OK', $(if ($ok) { 'Information' } else { 'Warning' })) | Out-Null
         $ui.StatusText.Text = $(if ($ok) { $script:DrvFixName + ': erledigt.' } else { $script:DrvFixName + ': nicht automatisch behebbar - siehe Hinweis.' })
         Update-DrvInventory
     }
@@ -32778,7 +33092,7 @@ $ui.BtnUpAppSel.Add_Click({ $ids = @($ui.UpAppGrid.SelectedItems | ForEach-Objec
 $ui.BtnUpAppAll.Add_Click({ $ids = @($script:UpApps | Where-Object { -not $_.Excluded } | ForEach-Object { $_.Id }); if (-not $ids.Count) { Show-UiError 'Nichts zu aktualisieren - zuerst suchen.'; return }; if (Confirm-Ui ('{0} Programme aktualisieren? Laufende Programme werden ggf. kurz geschlossen.' -f $ids.Count)) { Start-Run -Parts @('WingetInstall') -WingetApps $ids } })
 $ui.BtnUpAppExcl.Add_Click({ $ids = @($ui.UpAppGrid.SelectedItems | ForEach-Object { $_.Id }); if ($ids.Count) { Set-UpExclude $ids $true; $ui.StatusText.Text = ($ids -join ', ') + ' wird nicht mehr automatisch aktualisiert.' } })
 $ui.BtnUpAppIncl.Add_Click({ $ids = @($ui.UpAppGrid.SelectedItems | ForEach-Object { $_.Id }); if ($ids.Count) { Set-UpExclude $ids $false; $ui.StatusText.Text = ($ids -join ', ') + ' wird wieder aktualisiert.' } })
-$ui.BtnUpAppShow.Add_Click({ $r = $ui.UpAppGrid.SelectedItem; if (-not $r) { return }; $wg = Get-WingetPathX; if (-not $wg) { return }; $window.Cursor = 'Wait'; $o = (& $wg show --id $r.Id --exact --accept-source-agreements --disable-interactivity 2>$null | ForEach-Object { ([string]$_ -split "`r")[-1] } | Where-Object { $_.Trim() -and $_ -notmatch '^[\s\-\\|/]+$' } | Select-Object -First 40) -join "`n"; $window.Cursor = $null; [Windows.MessageBox]::Show($o, ('PC-Tools - ' + $r.Name), 'OK', 'Information') | Out-Null })
+$ui.BtnUpAppShow.Add_Click({ $r = $ui.UpAppGrid.SelectedItem; if (-not $r) { return }; $wg = Get-WingetPathX; if (-not $wg) { return }; $window.Cursor = 'Wait'; $o = (& $wg show --id $r.Id --exact --accept-source-agreements --disable-interactivity 2>$null | ForEach-Object { ([string]$_ -split "`r")[-1] } | Where-Object { $_.Trim() -and $_ -notmatch '^[\s\-\\|/]+$' } | Select-Object -First 40) -join "`n"; $window.Cursor = $null; [Windows.MessageBox]::Show((T ($o)), (T (('PC-Tools - ' + $r.Name))), 'OK', 'Information') | Out-Null })
 $ui.BtnUpWuScan.Add_Click({
     $ui.UpWuInfo.Text = 'Suche bei Windows Update (1-3 Minuten) ...'; $ui.BtnUpWuScan.IsEnabled = $false
     Invoke-Bg -Script {
@@ -33265,7 +33579,7 @@ function Start-TbLoadAll {
     if ($wgT.Count -and (Get-WingetPathX)) {
         $miss = @($wgT | Where-Object { (Test-KsInstalled $_.WingetId $_.Arp) -ne $true } | ForEach-Object { $_.Name })
         $msg = ("Alle {0} portablen Werkzeuge laden bzw. aktualisieren? Bereits aktuelle werden übersprungen.`n`nSollen zusätzlich die {1} Programme ohne portable Version per winget auf diesem PC installiert bzw. aktualisiert werden?`n{2}{3}`n`nJa = portable Werkzeuge und winget-Programme`nNein = nur portable Werkzeuge" -f $port.Count, $wgT.Count, (($wgT | ForEach-Object { '  - ' + $_.Name }) -join "`n"), $(if ($miss.Count) { "`n(noch nicht installiert: " + ($miss -join ', ') + ')' } else { '' }))
-        $ans = [Windows.MessageBox]::Show($msg, 'PC-Tools - Toolbox', 'YesNoCancel', 'Question')
+        $ans = [Windows.MessageBox]::Show((T ($msg)), (T ('PC-Tools - Toolbox')), 'YesNoCancel', 'Question')
         if ($ans -eq 'Cancel') { return }
         if ($ans -eq 'Yes') { $keys += @($wgT | ForEach-Object { $_.Key }) }
     } elseif (-not (Confirm-Ui ('Alle {0} portablen Werkzeuge laden bzw. aktualisieren? Bereits aktuelle werden übersprungen.' -f $port.Count))) { return }
@@ -33511,7 +33825,7 @@ function Install-KsIds([string[]]$Ids, [string]$Title, [bool]$Ask = $true) {
     if ($Ask) {
         $names = @($list | ForEach-Object { $ap = Get-KsApp $_; $st = Test-KsInstalled $ap.Id $ap.Arp; '  - {0}{1}' -f $ap.Name, $(if ($st -eq $true) { '  (installiert - wird aktualisiert)' } else { '' }) })
         $msg = "{0}: {1} Programm(e) installieren?`n`n{2}`n`nDie Installation läuft still im Hintergrund über winget (Download direkt vom Hersteller). Laufende Programme bitte vorher schließen.{3}" -f $Title, $list.Count, ($names -join "`n"), $(if ($Script:IsPortable) { "`n`nHinweis: PC-Tools läuft vom Stick - die Programme werden auf DIESEM PC installiert." } else { '' })
-        if ([Windows.MessageBox]::Show($msg, 'PC-Tools - Software-Kiosk', 'YesNo', 'Question') -ne 'Yes') { return }
+        if ([Windows.MessageBox]::Show((T ($msg)), (T ('PC-Tools - Software-Kiosk')), 'YesNo', 'Question') -ne 'Yes') { return }
     }
     $script:KsJobWatch = $true
     Start-Run -Parts @('WingetInstall') -WingetApps $list
@@ -33865,7 +34179,7 @@ $ui.BtnKsWgSearch.Add_Click({
     if (-not $sel) { return }
     $r = Get-KsRole $script:KsRoleSel
     if (Test-KsUserRole $r) {
-        $ans = [Windows.MessageBox]::Show(("{0} ({1})`n`nJa = jetzt installieren`nNein = in die Rolle ""{2}"" aufnehmen" -f $sel.Name, $sel.Id, $r.Name), 'PC-Tools - Software-Kiosk', 'YesNoCancel', 'Question')
+        $ans = [Windows.MessageBox]::Show((T (("{0} ({1})`n`nJa = jetzt installieren`nNein = in die Rolle ""{2}"" aufnehmen" -f $sel.Name, $sel.Id, $r.Name))), (T ('PC-Tools - Software-Kiosk')), 'YesNoCancel', 'Question')
         if ($ans -eq 'Yes') { Install-KsIds @($sel.Id) $sel.Name $false } elseif ($ans -eq 'No') { Add-KsRoleApp $sel.Id $sel.Name }
     } else { Install-KsIds @($sel.Id) $sel.Name }
 })
@@ -34830,7 +35144,7 @@ function Start-HwBat {
     $script:HwBat = @{ Phase = 'wait'; T0 = Get-Date; Samples = [System.Collections.Generic.List[object]]::new(); Last = [datetime]::MinValue; Sec = 180 }
     $ui.BtnHwBatStart.IsEnabled = $false; $ui.BtnHwBatStop.IsEnabled = $true
     Update-HwBadge 'Bat' 'run'; $ui.HwBatProg.Value = 0; $ui.HwBatPct.Text = ''
-    if ($s.Online) { $ui.HwBatStatus.Text = 'Bitte jetzt das Netzteil abziehen - die Messung beginnt automatisch (wartet bis zu 2 Minuten). Bildschirmhelligkeit und Programme wie im Alltag lassen.'; [Windows.MessageBox]::Show('Bitte jetzt das Netzteil abziehen. Die 3-Minuten-Messung beginnt automatisch, sobald der Laptop im Akkubetrieb läuft.', 'PC-Tools - Akku-Test', 'OK', 'Information') | Out-Null }
+    if ($s.Online) { $ui.HwBatStatus.Text = 'Bitte jetzt das Netzteil abziehen - die Messung beginnt automatisch (wartet bis zu 2 Minuten). Bildschirmhelligkeit und Programme wie im Alltag lassen.'; [Windows.MessageBox]::Show((T ('Bitte jetzt das Netzteil abziehen. Die 3-Minuten-Messung beginnt automatisch, sobald der Laptop im Akkubetrieb läuft.')), (T ('PC-Tools - Akku-Test')), 'OK', 'Information') | Out-Null }
     $script:HwBatTimer.Start()
     Update-HwBatMeasure
 }
@@ -34957,7 +35271,7 @@ function Show-HwDisplayTest {
     [void]$w.ShowDialog(); $hideT.Stop()
     $seen = $script:HwDispIdx + 1
     if ($seen -le 0) { $ui.HwDispStatus.Text = 'Test beendet, bevor ein Testbild gezeigt wurde.'; return }
-    $a = [Windows.MessageBox]::Show(("{0} von {1} Testbildern angesehen.`n`nWar der Bildschirm überall einwandfrei - keine hellen/dunklen Punkte, Flecken, Streifen oder Lichthöfe?`n`nJa = einwandfrei   Nein = Fehler gefunden   Abbrechen = nicht bewerten" -f $seen, $pats.Count), 'PC-Tools - Bildschirm-Pixeltest', 'YesNoCancel', 'Question')
+    $a = [Windows.MessageBox]::Show((T (("{0} von {1} Testbildern angesehen.`n`nWar der Bildschirm überall einwandfrei - keine hellen/dunklen Punkte, Flecken, Streifen oder Lichthöfe?`n`nJa = einwandfrei   Nein = Fehler gefunden   Abbrechen = nicht bewerten" -f $seen, $pats.Count))), (T ('PC-Tools - Bildschirm-Pixeltest')), 'YesNoCancel', 'Question')
     if ($a -eq 'Yes') { Set-HwResult 'Disp' $(if ($seen -ge $pats.Count) { 'ok' } else { 'warn' }) $(if ($seen -ge $pats.Count) { 'alle {0} Testbilder einwandfrei' -f $pats.Count } else { '{0} von {1} Testbildern einwandfrei (nicht alle angesehen)' -f $seen, $pats.Count }) ('Geprüft: ' + (($pats | Select-Object -First $seen | ForEach-Object { $_.N }) -join ', ')); return }
     if ($a -ne 'No') { return }
     $r = Show-InputDialog 'Bildschirm-Pixeltest' 'Was ist aufgefallen?' @(
@@ -35078,7 +35392,7 @@ function Show-HwKeyboardTest {
     if ($script:HwKbdPresses -eq 0) { $ui.HwKbdStatus.Text = 'Keine Taste gedrückt - Test nicht bewertet.'; return }
     $det = 'Haupttasten {0}/{1}, Navigation/Ziffernblock {2}/{3}, {4} Tastendrücke.{5}{6}' -f $mh, $main.Count, $oh, $opt.Count, $script:HwKbdPresses, $(if ($miss.Count) { ' Nicht erkannt: ' + ($miss -join ', ') + '.' } else { '' }), $(if ($script:HwKbdUnknown.Count) { ' Zusätzlich: ' + ($script:HwKbdUnknown -join ', ') + '.' } else { '' })
     if (-not $miss.Count) { Set-HwResult 'Kbd' 'ok' ('alle {0} Haupttasten funktionieren{1}' -f $main.Count, $(if ($oh) { ', dazu {0} Navigations-/Ziffernblocktasten' -f $oh } else { '' })) $det; return }
-    $a = [Windows.MessageBox]::Show(("{0} Haupttaste(n) wurden nicht erkannt:`n{1}`n`nLiegt das nur daran, dass du sie nicht gedrückt hast bzw. die Tastatur sie nicht hat?`n`nJa = Tastatur in Ordnung   Nein = diese Tasten sind defekt   Abbrechen = nicht bewerten" -f $miss.Count, ($miss -join ', ')), 'PC-Tools - Tastatur-Test', 'YesNoCancel', 'Question')
+    $a = [Windows.MessageBox]::Show((T (("{0} Haupttaste(n) wurden nicht erkannt:`n{1}`n`nLiegt das nur daran, dass du sie nicht gedrückt hast bzw. die Tastatur sie nicht hat?`n`nJa = Tastatur in Ordnung   Nein = diese Tasten sind defekt   Abbrechen = nicht bewerten" -f $miss.Count, ($miss -join ', ')))), (T ('PC-Tools - Tastatur-Test')), 'YesNoCancel', 'Question')
     if ($a -eq 'Yes') { Set-HwResult 'Kbd' 'ok' ('{0} von {1} Haupttasten geprüft, Rest nicht vorhanden/nicht gedrückt' -f $mh, $main.Count) $det }
     elseif ($a -eq 'No') { Set-HwResult 'Kbd' 'bad' ('{0} Taste(n) reagieren nicht: {1}' -f $miss.Count, ($miss -join ', ')) $det }
 }
@@ -35146,7 +35460,7 @@ function Show-HwTouchTest {
     $det = 'Abdeckung {0} % ({1} von {2} Feldern), Eingabe per {3}, max. {4} gleichzeitige Berührung(en).{5}' -f $pct, $t.Count, $cells.Length, $kinds, $t.MaxTouches, $penTxt
     if (-not ($t.Kinds.ContainsKey('Finger') -or $t.Kinds.ContainsKey('Stift'))) { $det += ' Nur mit der Maus getestet - Touch/Stift damit nicht geprüft.' }
     if ($pct -ge 95) { Set-HwResult 'Touch' $(if ($t.Kinds.ContainsKey('Finger') -or $t.Kinds.ContainsKey('Stift')) { 'ok' } else { 'warn' }) ('{0} % der Fläche reagiert ({1})' -f $pct, $kinds) $det; return }
-    $a = [Windows.MessageBox]::Show(("Es wurden {0} % der Felder erreicht.`n`nGab es Stellen, die trotz Berührung NICHT reagiert haben?`n`nJa = es gibt tote Bereiche (Fehler)   Nein = nur nicht überall gemalt (Warnung)   Abbrechen = nicht bewerten" -f $pct), 'PC-Tools - Touch/Stift-Test', 'YesNoCancel', 'Question')
+    $a = [Windows.MessageBox]::Show((T (("Es wurden {0} % der Felder erreicht.`n`nGab es Stellen, die trotz Berührung NICHT reagiert haben?`n`nJa = es gibt tote Bereiche (Fehler)   Nein = nur nicht überall gemalt (Warnung)   Abbrechen = nicht bewerten" -f $pct))), (T ('PC-Tools - Touch/Stift-Test')), 'YesNoCancel', 'Question')
     if ($a -eq 'Yes') { Set-HwResult 'Touch' 'bad' ('Bereiche reagieren nicht (Abdeckung {0} %)' -f $pct) $det }
     elseif ($a -eq 'No') { Set-HwResult 'Touch' 'warn' ('nur {0} % der Fläche geprüft ({1})' -f $pct, $kinds) $det }
 }
@@ -36608,7 +36922,7 @@ $ui.BtnAkPdf.Add_Click({
         $window.Cursor = $null
         if ($err) { Show-UiError ('PDF fehlgeschlagen: ' + $err.Message); return }
         $f = [string](@($r | Where-Object { $_ })[-1]); $ui.StatusText.Text = 'Geräte-Akte gespeichert: ' + $f
-        if ($f -match '\.html$' -and $script:AkPdfTarget -match '\.pdf$') { [Windows.MessageBox]::Show('Microsoft Edge wurde nicht gefunden - die Akte wurde als Webseite gespeichert. Zum PDF: öffnen und mit "Drucken > Microsoft Print to PDF" speichern.', 'PC-Tools', 'OK', 'Information') | Out-Null }
+        if ($f -match '\.html$' -and $script:AkPdfTarget -match '\.pdf$') { [Windows.MessageBox]::Show((T ('Microsoft Edge wurde nicht gefunden - die Akte wurde als Webseite gespeichert. Zum PDF: öffnen und mit "Drucken > Microsoft Print to PDF" speichern.')), (T ('PC-Tools')), 'OK', 'Information') | Out-Null }
         try { Start-Process -FilePath $f } catch { }
     }
 })
@@ -37314,7 +37628,8 @@ function Show-EditionChooser([bool]$PreLite) {
       <Border CornerRadius="18,18,0,0" Padding="30,24,30,22">
         <Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#2563EB" Offset="0"/><GradientStop Color="#6D4AE8" Offset="0.55"/><GradientStop Color="#A23FD1" Offset="1"/></LinearGradientBrush></Border.Background>
         <StackPanel>
-          <TextBlock Text="Willkommen bei PC-Tools 10" Foreground="White" FontSize="26" FontWeight="SemiBold"/>
+          <Grid><TextBlock Text="Willkommen bei PC-Tools 10" Foreground="White" FontSize="26" FontWeight="SemiBold"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"><TextBlock Text="&#xE774;" FontFamily="Segoe MDL2 Assets" Foreground="White" FontSize="16" VerticalAlignment="Center" Margin="0,0,8,0"/><ComboBox x:Name="EdLang" Uid="notr" Width="190" FontSize="13">__LANGITEMS__</ComboBox></StackPanel></Grid>
           <TextBlock Text="Wie möchtest du arbeiten? Du kannst die Ausgabe jederzeit unter Einstellungen &gt; Stabilität wechseln - es ist dasselbe Programm, nur die Ansicht ändert sich." Foreground="#E6E9FF" FontSize="13" TextWrapping="Wrap" Margin="0,6,0,0"/>
         </StackPanel>
       </Border>
@@ -37352,7 +37667,20 @@ function Show-EditionChooser([bool]$PreLite) {
 </Window>
 '@
     $x = $x.Replace('PC-Tools 10', 'PC-Tools ' + (($AppVersion -split '\.')[0]))
+    $x = $x.Replace('__LANGITEMS__', ((@($LangList.Keys | ForEach-Object { '<ComboBoxItem Uid="notr" Content="{0}" Tag="{1}"/>' -f $LangList[$_], $_ })) -join ''))
     $w = [Windows.Markup.XamlReader]::Parse($x)
+    $script:EdRelaunch = $false
+    $lb = $w.FindName('EdLang'); foreach ($it in $lb.Items) { if ([string]$it.Tag -eq $script:UiLang) { $lb.SelectedItem = $it } }
+    $lb.Add_SelectionChanged({
+        param($sd, $e)
+        $c = [string]$sd.SelectedItem.Tag; if (-not $c -or $c -eq $script:UiLang) { return }
+        $sd.IsEnabled = $false; $script:EdW.Cursor = 'Wait'
+        $ok = $false; try { $ok = Initialize-I18n $c -Download } catch { }
+        $script:EdW.Cursor = $null
+        if (-not $ok -and $c -ne 'de-DE') { [Windows.MessageBox]::Show((T (('The language file for {0} could not be loaded (no internet connection?). PC-Tools stays in German for now - you can change the language later under Settings.' -f $LangList[$c]))), (T ('PC-Tools')), 'OK', 'Warning') | Out-Null; $sd.IsEnabled = $true; return }
+        Set-UiLang $c
+        $script:EdRelaunch = $true; $script:EdW.Close()
+    })
     $script:EdLite = $PreLite; $script:EdW = $w; $script:EdOk = $false
     $script:EdCards = @{ Lite = $w.FindName('CardLite'); Full = $w.FindName('CardFull') }
     $script:EdPaint = {
@@ -37368,7 +37696,7 @@ function Show-EditionChooser([bool]$PreLite) {
     $w.Add_MouseLeftButtonDown({ param($s, $e) try { if ($e.OriginalSource -isnot [Windows.Controls.Primitives.ButtonBase]) { $s.DragMove() } } catch { } })
     $w.Add_KeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $script:EdOk = $true; $s.Close() } elseif ($e.Key -eq 'Escape') { $s.Close() } })
     [void]$w.ShowDialog()
-    return [pscustomobject]@{ Ok = $script:EdOk; Lite = [bool]$script:EdLite; Remember = [bool]$w.FindName('Remember').IsChecked; TbAuto = [bool]$w.FindName('TbAutoFirst').IsChecked }
+    return [pscustomobject]@{ Relaunch = [bool]$script:EdRelaunch; Ok = $script:EdOk; Lite = [bool]$script:EdLite; Remember = [bool]$w.FindName('Remember').IsChecked; TbAuto = [bool]$w.FindName('TbAutoFirst').IsChecked }
 }
 function Set-EditionFiles([bool]$Lite) {
     $files = @(Join-Path $DataDir 'lite.txt'); if ($PSScriptRoot -and ($PSScriptRoot.TrimEnd('\') -ne $DataDir.TrimEnd('\'))) { $files += (Join-Path $PSScriptRoot 'lite.txt') }
@@ -37380,6 +37708,8 @@ $edMode = ''; try { if (Test-Path -LiteralPath $EditionFile) { $edMode = ([strin
 if ($edMode -notin 'Lite', 'Voll') {
     try {
         $ch = Show-EditionChooser ([bool]$Script:IsLite)
+        $nRel = 0
+        while ($ch.Relaunch -and $nRel -lt 12) { $nRel++; $ch = Show-EditionChooser ([bool]$ch.Lite) }
         if ($ch.Ok) {
             Set-EditionFiles $ch.Lite
             Set-Content -LiteralPath $EditionFile -Value $(if (-not $ch.Remember) { 'Fragen' } elseif ($ch.Lite) { 'Lite' } else { 'Voll' }) -Encoding ASCII
@@ -37405,6 +37735,21 @@ $ui.BtnLiteToggle.Add_Click({
         $ui.StatusText.Text = $(if ($on) { 'Lite-Ansicht eingeschaltet.' } else { 'Volle Ansicht eingeschaltet.' })
     } catch { Show-UiError $_.Exception.Message }
 })
+# ---- Sprache (Version 14)
+try { foreach ($it in $ui.LangBox.Items) { if ([string]$it.Tag -eq $script:UiLang) { $ui.LangBox.SelectedItem = $it } }; $ui.StabLangInfo.Text = Get-LangStatusText } catch { }
+$ui.BtnLangApply.Add_Click({
+    $c = [string]$ui.LangBox.SelectedItem.Tag
+    if (-not $c -or $c -eq $script:UiLang) { $ui.StatusText.Text = 'Diese Sprache ist bereits aktiv.'; return }
+    if ($c -ne 'de-DE' -and -not (Get-LangFile $c)) {
+        $ok = $false; try { $ok = [bool](@(Invoke-UiWait { param($x) Save-LangFile $x } @($c) @('Save-LangFile') 120 'Sprachdatei wird geladen ...') | Where-Object { $_ }).Count } catch { }
+        if (-not $ok -and -not (Get-LangFile $c)) { Show-UiError 'Die Sprachdatei konnte nicht geladen werden. Bitte Internetverbindung prüfen und erneut versuchen.'; return }
+    }
+    Set-UiLang $c
+    if ($script:Job) { $ui.StatusText.Text = 'Die Sprache wird beim nächsten Start von PC-Tools übernommen.'; return }
+    if (Confirm-Ui 'Die neue Sprache wird nach einem Neustart von PC-Tools aktiv. Jetzt neu starten?') { try { $script:Restarting = $true; $null = Start-HiddenPS $PSCommandPath; $window.Close() } catch { Show-UiError $_.Exception.Message } }
+})
+$ui.BtnLangReport.Add_Click({ Open-LangReport })
+try { Update-LangFileBg } catch { }
 $ui.BtnEdAsk.Add_Click({ try { Set-Content -LiteralPath (Join-Path $DataDir 'edition.txt') -Value 'Fragen' -Encoding ASCII; $ui.StatusText.Text = 'Beim nächsten Start erscheint wieder die Auswahl Lite / Vollversion.' } catch { Show-UiError $_.Exception.Message } })
 function Update-StabInfo {
     $pv = Get-PflegeVorversion
@@ -38276,7 +38621,7 @@ function Start-CcClean {
     foreach ($it in $items) { foreach ($p in @($it.Proc)) { if ($p -and $run.ContainsKey(([string]$p).ToLower())) { $hit[[string]$p] = [string]$it.Sub } } }
     if ($hit.Count) {
         $names = (@($hit.Values | Select-Object -Unique) -join ', ')
-        $a = [Windows.MessageBox]::Show(('Diese Programme laufen gerade: {0}{1}{1}Ja = jetzt schließen und alles reinigen (nicht gespeicherte Eingaben in diesen Programmen gehen verloren){1}Nein = diese Bereiche überspringen, den Rest reinigen{1}Abbrechen = nichts tun' -f $names, [Environment]::NewLine), 'PC-Tools', 'YesNoCancel', 'Question')
+        $a = [Windows.MessageBox]::Show((T (('Diese Programme laufen gerade: {0}{1}{1}Ja = jetzt schließen und alles reinigen (nicht gespeicherte Eingaben in diesen Programmen gehen verloren){1}Nein = diese Bereiche überspringen, den Rest reinigen{1}Abbrechen = nichts tun' -f $names, [Environment]::NewLine))), (T ('PC-Tools')), 'YesNoCancel', 'Question')
         if ([string]$a -eq 'Cancel') { return }
         if ([string]$a -eq 'Yes') {
             $script:CcPendingIds = $ids
@@ -38405,7 +38750,7 @@ $ui.BtnCcRegRestore.Add_Click({
     try {
         $r = Restore-CcRegBackup $b.Dir
         $ui.StatusText.Text = 'Sicherung zurückgespielt: {0} Datei(en) importiert{1}.' -f $r.Ok, $(if ($r.Bad) { (', {0} fehlgeschlagen' -f $r.Bad) } else { '' })
-        [Windows.MessageBox]::Show($ui.StatusText.Text, 'PC-Tools') | Out-Null
+        [Windows.MessageBox]::Show((T ($ui.StatusText.Text)), (T ('PC-Tools'))) | Out-Null
     } catch { Show-UiError ('Zurückspielen nicht möglich: ' + $_.Exception.Message) }
 })
 
@@ -39268,7 +39613,7 @@ function Invoke-DsSetRestoreDevice {
         $c = $script:DsRestoreCtx
         if ($err) { Show-UiError ('pnputil: ' + $err.Message); return }
         $res = @($r | Where-Object { $_ -and $_.PSObject.Properties['Out'] })[0]
-        if ($res -and [string]$res.Version -eq $c.Want) { $ui.StatusText.Text = ('{0}: Treiber {1} ist wieder aktiv.' -f $c.Device, $c.Want); [Windows.MessageBox]::Show(('Erledigt: "{0}" nutzt wieder den gesicherten Treiber {1}.' -f $c.Device, $c.Want), 'PC-Tools', 'OK', 'Information') | Out-Null; Update-DsSetList; return }
+        if ($res -and [string]$res.Version -eq $c.Want) { $ui.StatusText.Text = ('{0}: Treiber {1} ist wieder aktiv.' -f $c.Device, $c.Want); [Windows.MessageBox]::Show((T (('Erledigt: "{0}" nutzt wieder den gesicherten Treiber {1}.' -f $c.Device, $c.Want))), (T ('PC-Tools')), 'OK', 'Information') | Out-Null; Update-DsSetList; return }
         $nowInf = if ($res -and $res.Inf) { [string]$res.Inf } else { $c.NowInf }
         $users = @($c.Set.All | Where-Object { [string]$_.NowInf -eq $nowInf -and $nowInf }).Count
         $q = ("Das gesicherte Paket ist jetzt im Treiberspeicher, aber Windows nutzt für ""{0}"" weiter Version {1} - der neuere Treiber hat eine bessere Einstufung.`n`nSoll PC-Tools das neuere Paket {2} entfernen (pnputil /delete-driver {2} /uninstall) und die Geräte neu erkennen lassen? Dann greift Windows auf den gesicherten Treiber {3} zurück.`n`nDas betrifft alle Geräte, die {2} nutzen ({4}).{5}`n`nNein = stattdessen die Geräte-Eigenschaften öffnen (Treiber > ""Vorheriger Treiber"" bzw. ""Treiber aktualisieren > Auf meinem Computer suchen > Aus einer Liste"")." -f $c.Device, $(if ($res) { $res.Version } else { '?' }), $nowInf, $c.Want, $(if ($users) { '{0} Gerät(e) laut Sicherung' -f $users } else { 'Anzahl unbekannt' }), $(if ($c.Crit) { "`n`nACHTUNG: Speicher-/Systemtreiber - im Zweifel Nein wählen." } else { '' }))
@@ -39288,7 +39633,7 @@ function Invoke-DsSetRestoreDevice {
             $ui.DsSetProg.Visibility = 'Collapsed'; $window.Cursor = $null
             $c2 = $script:DsRestoreCtx
             $x2 = @($r2 | Where-Object { $_ -and $_.PSObject.Properties['Out'] })[0]
-            if ($x2 -and [string]$x2.Version -eq $c2.Want) { [Windows.MessageBox]::Show(('Erledigt: "{0}" nutzt wieder den gesicherten Treiber {1}. Ein Neustart schadet nicht.' -f $c2.Device, $c2.Want), 'PC-Tools', 'OK', 'Information') | Out-Null }
+            if ($x2 -and [string]$x2.Version -eq $c2.Want) { [Windows.MessageBox]::Show((T (('Erledigt: "{0}" nutzt wieder den gesicherten Treiber {1}. Ein Neustart schadet nicht.' -f $c2.Device, $c2.Want))), (T ('PC-Tools')), 'OK', 'Information') | Out-Null }
             else { Show-UiError (("Noch nicht am Ziel (jetzt: {0}). Es öffnen sich die Geräte-Eigenschaften: Treiber > ""Treiber aktualisieren"" > ""Auf meinem Computer suchen"" > ""Aus einer Liste verfügbarer Treiber"" und die Version {1} wählen.`n`npnputil:`n{2}" -f $(if ($x2 -and $x2.Version) { $x2.Version } else { 'Gerät nicht gefunden' }), $c2.Want, $(if ($x2) { ([string]$x2.Out).Trim() } else { [string]$err2 }))); Start-Process rundll32.exe -ArgumentList ('devmgr.dll,DeviceProperties_RunDLL /DeviceID "{0}"' -f $c2.DeviceId) }
             Update-DsSetList
         }
@@ -39324,7 +39669,7 @@ $ui.BtnDsSetBios.Add_Click({
     $t = ("BIOS/UEFI jetzt: {0} vom {1}{2}`n`n{3}`n`nPC-Tools spielt BIOS und Firmware nie selbst ein - ein abgebrochener Flash-Vorgang kann den PC unbrauchbar machen." -f $(if ($bn) { $bn.Version } else { '?' }), $(if ($bn) { $bn.Release } else { '?' }), $(if ($bo) { "`nGesichert ({0}): {1} vom {2}{3}" -f $s.DateText, $bo.Version, $bo.Release, $(if ([string]$bo.Version -ne [string]$bn.Version) { '  -> seitdem GEÄNDERT' } else { '  (unverändert)' }) } else { '' }), (Get-DsBiosHint $vendor))
     $u = Get-DsSupportUrl $vendor
     if ($u) { if (Confirm-Ui ($t + "`n`nSupport-Seite des Herstellers öffnen?") 'Information') { Start-Process $u } }
-    else { [Windows.MessageBox]::Show($t, 'PC-Tools', 'OK', 'Information') | Out-Null }
+    else { [Windows.MessageBox]::Show((T ($t)), (T ('PC-Tools')), 'OK', 'Information') | Out-Null }
 })
 $ui.BtnDsSetDevMgr.Add_Click({ $x = $ui.DsChgGrid.SelectedItem; if ($x -and $x.DeviceId) { Start-Process rundll32.exe -ArgumentList ('devmgr.dll,DeviceProperties_RunDLL /DeviceID "{0}"' -f $x.DeviceId) } else { Start-Process devmgmt.msc } })
 $ui.BtnDsSetOpen.Add_Click({ $s = $ui.DsSetGrid.SelectedItem; $p = if ($s) { $s.Path } else { Get-DsRoot }; New-Item $p -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null; Start-Process explorer.exe ('"{0}"' -f $p) })
@@ -40270,7 +40615,7 @@ function Show-FdJobResult($Row) {
         $null = $sb.AppendLine()
         foreach ($d in @($Row.Data)) { if ($d) { $null = $sb.AppendLine(('{0} {1}: {2}{3}' -f $(switch ([string]$d.Level) { 'Error' { '✗' } 'Warn' { '!' } default { '✓' } }), $d.Area, $d.State, $(if ($d.Detail) { ' - ' + $d.Detail } else { '' }))) } }
     }
-    [Windows.MessageBox]::Show($sb.ToString(), 'PC-Tools - Ergebnis des Auftrags', 'OK', 'Information') | Out-Null
+    [Windows.MessageBox]::Show((T ($sb.ToString())), (T ('PC-Tools - Ergebnis des Auftrags')), 'OK', 'Information') | Out-Null
 }
 
 # ---- Ereignisse
@@ -40347,7 +40692,7 @@ $ui.FdBtnWatchPreview.Add_Click({
     $cfg = Get-ConfigFromUi
     $inc = @(Get-FdIncidents $script:FdRows $script:FdJobRows (Get-FdRules $cfg) $now)
     $txt = if ($inc.Count) { ($inc | ForEach-Object { '{0} {1}: {2}' -f $(if ($_.Level -eq 'Red') { '●' } else { '○' }), $_.Title, $_.Text }) -join "`n`n" } else { 'Nach den eingestellten Regeln gibt es gerade nichts zu melden.' }
-    [Windows.MessageBox]::Show(("Vorschau (es wird nichts gesendet; schon gemeldete Probleme werden beim echten Lauf übersprungen):`n`n" + $txt), 'PC-Tools - Benachrichtigung bei Problem', 'OK', 'Information') | Out-Null
+    [Windows.MessageBox]::Show((T (("Vorschau (es wird nichts gesendet; schon gemeldete Probleme werden beim echten Lauf übersprungen):`n`n" + $txt))), (T ('PC-Tools - Benachrichtigung bei Problem')), 'OK', 'Information') | Out-Null
 })
 function Update-FdKeyInfo {
     try { $fp = [string](Get-FdKeyFingerprint); $ui.FdKeyInfo.Text = if ($fp) { 'Auftragsschlüssel aktiv, Fingerabdruck {0}. Dieser PC signiert seine Aufträge und nimmt nur signierte an. Auf allen PCs muss derselbe Fingerabdruck stehen (Spalte "Schutz").' -f $fp } else { 'Kein Auftragsschlüssel - dieser PC nimmt jeden Auftrag aus dem Ordner an.' } } catch { $ui.FdKeyInfo.Text = 'Auftragsschlüssel nicht lesbar: ' + $_.Exception.Message + ' - Aufträge werden abgelehnt, bis er neu festgelegt oder entfernt wird.' }
@@ -40877,7 +41222,7 @@ function Invoke-AiOneShot([string]$Task, [string]$Data, [scriptblock]$Done, [int
     $s = Get-AiSettings
     $why = Get-AiNotReadyText $s
     if ($why) { & $Done '' $why; return }
-    $sys = "Du bist der KI-Assistent in PC-Tools (Version $AppVersion), einem Windows-Werkzeugkasten. Antworte immer auf Deutsch, freundlich und so einfach, dass es Menschen ohne IT-Wissen verstehen. Erfinde nichts: Wenn die Daten etwas nicht hergeben, sag das. Nenne konkrete nächste Schritte, möglichst mit den passenden Seiten von PC-Tools."
+    $sys = "Du bist der KI-Assistent in PC-Tools (Version $AppVersion), einem Windows-Werkzeugkasten. Antworte immer auf " + $(if ($script:UiLang -ne 'de-DE') { $LangAiName[$script:UiLang] + ' (Sprache der Oberfläche)' } else { 'Deutsch' }) + ", freundlich und so einfach, dass es Menschen ohne IT-Wissen verstehen. Erfinde nichts: Wenn die Daten etwas nicht hergeben, sag das. Nenne konkrete nächste Schritte, möglichst mit den passenden Seiten von PC-Tools."
     $msg = @([ordered]@{ role = 'user'; content = ($Task + "`n`n--- Daten ---`n" + (Limit-AiText (Protect-AiText $Data) 14000)) })
     $json = if ($s.Kind -eq 'anthropic') { New-AiRequestBody $s.Model $sys $msg @() $MaxTokens } else { New-AiOpenAiBody $s.Model $sys $msg @() $MaxTokens ([string]$s.Prov.TokField) }
     $id = [guid]::NewGuid().ToString('N'); $script:AiShots[$id] = $Done
@@ -41557,7 +41902,7 @@ $ui.AiBtnQuickSetup.Add_Click({
     Start-AiOllamaSetup
 })
 $ui.AiBtnMic.Add_Click({ Start-AiDictation })
-$ui.AiBtnMemShow.Add_Click({ $m = Get-AiMemoryText $DataDir; [Windows.MessageBox]::Show($(if ($m) { $m } else { 'Noch nichts gemerkt. Einträge entstehen, wenn du "Neues Gespräch" beginnst.' }), 'PC-Tools - Gedächtnis des KI-Assistenten', 'OK', 'Information') | Out-Null })
+$ui.AiBtnMemShow.Add_Click({ $m = Get-AiMemoryText $DataDir; [Windows.MessageBox]::Show((T ($(if ($m) { $m } else { 'Noch nichts gemerkt. Einträge entstehen, wenn du "Neues Gespräch" beginnst.' }))), (T ('PC-Tools - Gedächtnis des KI-Assistenten')), 'OK', 'Information') | Out-Null })
 $ui.AiBtnMemClear.Add_Click({ if (Confirm-Ui 'Alles löschen, was sich der KI-Assistent zu diesem PC gemerkt hat?') { try { $f = Get-AiMemoryFile $DataDir; if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force }; $ui.StatusText.Text = 'Gedächtnis gelöscht.' } catch { Show-UiError $_.Exception.Message } } })
 try { $script:AiWeekTimer.Start() } catch { }
 $ui.Assistant_KeyScope.Add_DropDownClosed({ Save-AiSettings; $ui.AiKeyTestInfo.Text = 'Gilt beim nächsten Speichern des Schlüssels. "Alle Konten" ist praktisch, wenn PC-Tools auch unter anderen Konten laufen soll - dann kann aber jedes Programm auf diesem PC den Schlüssel entschlüsseln.' })
@@ -41716,7 +42061,7 @@ $ui.BtnNdLive.Add_Click({
         }
         foreach ($v in @($t.Verdict)) { Add-NdLog ('>>> ' + $v) }
         $ui.NdBannerText.Text = (@($t.Verdict) -join "`n"); $ui.NdBanner.Visibility = 'Visible'
-        [Windows.MessageBox]::Show((@($t.Verdict) -join "`n`n"), 'PC-Tools - DHCP-Live-Test', 'OK', $(if ($t.Ok) { 'Information' } else { 'Warning' })) | Out-Null
+        [Windows.MessageBox]::Show((T ((@($t.Verdict) -join "`n`n"))), (T ('PC-Tools - DHCP-Live-Test')), 'OK', $(if ($t.Ok) { 'Information' } else { 'Warning' })) | Out-Null
         Start-NdScan
     }
 })
@@ -42139,7 +42484,7 @@ $ui.BtnBlMsSave.Add_Click({
     $ok = 0; $err = ''
     foreach ($k in $keys) { try { Backup-BitLockerKeyProtector -MountPoint $mp -KeyProtectorId $k.KeyProtectorId -ErrorAction Stop | Out-Null; $ok++ } catch { $err = $_.Exception.Message } }
     if ($ok) {
-        [Windows.MessageBox]::Show(("Der Wiederherstellungsschlüssel von {0} wurde in das verknüpfte Firmen-/Schulkonto (Microsoft Entra / Active Directory) gesichert." -f $mp), 'PC-Tools - BitLocker', 'OK', 'Information') | Out-Null
+        [Windows.MessageBox]::Show((T (("Der Wiederherstellungsschlüssel von {0} wurde in das verknüpfte Firmen-/Schulkonto (Microsoft Entra / Active Directory) gesichert." -f $mp))), (T ('PC-Tools - BitLocker')), 'OK', 'Information') | Out-Null
         $ui.StatusText.Text = ('BitLocker-Schlüssel ins Konto gesichert ({0}).' -f $mp)
     } else {
         $q = ("Dieser PC ist nicht mit einem Firmen-/Schulkonto (Entra/AD) verbunden - dorthin lässt sich der Schlüssel per Knopf nicht sichern." + [char]10 + [char]10 +
@@ -42547,7 +42892,7 @@ $ui.BtnBkOpen.Add_Click({ $t = Join-Path $ui.Backup_Target.Text.Trim() $env:COMP
 $ui.BtnBkImageList.Add_Click({
     $t = $ui.Backup_ImageTarget.Text.Trim(); if (-not $t) { return }; if ($t -match '^[A-Za-z]$') { $t += ':' }
     $o = (& wbadmin.exe get versions ('-backupTarget:{0}' -f $t) 2>&1) -join "`n"
-    [Windows.MessageBox]::Show($o, 'PC-Tools - Systemabbilder', 'OK', 'Information') | Out-Null
+    [Windows.MessageBox]::Show((T ($o)), (T ('PC-Tools - Systemabbilder')), 'OK', 'Information') | Out-Null
 })
 $ui.BtnBkRecovery.Add_Click({ Start-Tool 'RecoveryDrive.exe' })
 $ui.BtnBkRestoreBrowse.Add_Click({ Select-FolderInto $ui.BkRestoreSet; if ($ui.BkRestoreSet.Text) { Read-BkRestoreSet } })
@@ -42905,7 +43250,7 @@ if ($ui.ScanOut) {
 function Enable-PsRemotingUi {
     if (-not (Test-IsAdmin)) { Show-UiError 'Zum Aktivieren von PowerShell-Remoting bitte PC-Tools als Administrator starten.'; return }
     if (-not (Confirm-Ui ("PowerShell-Remoting (WinRM) auf diesem Rechner aktivieren?`n`nDamit lässt sich dieser Server/PC aus der Ferne per PowerShell verwalten (Enable-PSRemoting): der WinRM-Dienst wird gestartet und eine Firewall-Ausnahme angelegt.") 'Warning')) { return }
-    try { Enable-PSRemoting -Force -ErrorAction Stop | Out-Null; [Windows.MessageBox]::Show('PowerShell-Remoting ist aktiv (WinRM läuft, Firewall-Ausnahme gesetzt).', 'PC-Tools', 'OK', 'Information') | Out-Null; $ui.StatusText.Text = 'PowerShell-Remoting aktiviert.' }
+    try { Enable-PSRemoting -Force -ErrorAction Stop | Out-Null; [Windows.MessageBox]::Show((T ('PowerShell-Remoting ist aktiv (WinRM läuft, Firewall-Ausnahme gesetzt).')), (T ('PC-Tools')), 'OK', 'Information') | Out-Null; $ui.StatusText.Text = 'PowerShell-Remoting aktiviert.' }
     catch { Show-UiError ('Konnte Remoting nicht aktivieren: ' + $_.Exception.Message) }
 }
 function Update-SrvModeUi {

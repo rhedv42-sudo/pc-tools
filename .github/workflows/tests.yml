@@ -1,0 +1,14 @@
+name: Tests (Windows PowerShell 5.1)
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['PCPflege.ps1', 'lang/**', 'tests/**', 'launcher/**']
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Übersetzungskern und Sprachdateien prüfen
+        shell: powershell
+        run: ./tests/i18n-test.ps1
