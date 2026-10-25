@@ -17,6 +17,8 @@ Verbindungen ins Internet entstehen nur durch Funktionen, die der Benutzer start
 | KI-Assistent: Ollama einrichten (optional) | winget (Microsoft/GitHub), ollama.com | keine persönlichen Daten (Programm- und Modell-Download) | nur nach Bestätigung |
 | Benachrichtigungen (optional) | vom Benutzer eingetragene Ziele (ntfy, Home Assistant, Teams/Slack-Webhook) | Kurzmeldung zum PC-Zustand | Einstellungen > Benachrichtigungen |
 | Garantie-Abfrage, ISO-Download | Herstellerseiten, Microsoft, uupdump.net | Seriennummer/Modell bzw. Build | nur auf Knopfdruck |
+| Passwort-Check (optional) | api.pwnedpasswords.com (Have I Been Pwned) | nur die ersten 5 Zeichen des SHA-1-Fingerabdrucks jedes Passworts (k-Anonymität) – nie das Passwort selbst, nie Seite oder Benutzername | nur auf Knopfdruck |
+| Hilfe holen (optional) | der eigene „Meine PCs“-Ordner, die eingetragenen Benachrichtigungs-Ziele bzw. das eigene Mailprogramm | Bericht über den PC-Zustand (Score, Probleme, Fehler der letzten 3 Tage, letzte Protokollzeilen) – keine Passwörter, keine Dateien | nur auf Knopfdruck |
 | Netzwerk-Prüfungen | nur Geräte im eigenen Netz bzw. der eigene Router | Verbindungsversuche | nur auf Knopfdruck / Zeitplan, den der Benutzer einschaltet |
 
 Zugangsdaten (FRITZ!Box-Kennwort, Home-Assistant-Token, API-Schlüssel, GitHub-Token) werden nie übertragen,
