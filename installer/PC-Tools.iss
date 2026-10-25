@@ -31,6 +31,7 @@ SetupIconFile={#SrcDir}\PCPflege.ico
 UninstallDisplayIcon={app}\PC-Tools.exe
 UninstallDisplayName=PC-Tools
 LicenseFile={#SrcDir}\LICENSE
+InfoBeforeFile={#SrcDir}\installer\Datenschutz.txt
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern

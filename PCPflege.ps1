@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Auto, [switch]$Run, [string]$Parts = '', [switch]$Analyze, [switch]$CheckOnly, [string]$RunId = '', [string]$AppsFile = '', [string]$WingetFile = '', [string]$DirectFile = '', [string]$Monitor = '', [switch]$DeskArrange, [string]$Topology = '', [int]$Delay = 0, [switch]$Silent, [switch]$Install, [string]$JobFile = '', [switch]$Backup, [switch]$FleetPoll, [string]$FirstLogon = '', [switch]$NetDiag, [switch]$TbSync, [switch]$WinRepair, [switch]$NetDeep, [string]$DeepOpts = '', [switch]$FullBackup, [switch]$FullRepair, [switch]$NetDoc, [switch]$Sign, [string]$SignOpts = '', [string]$ChocoFile = '')
 
-$AppVersion = '14.3.1'
+$AppVersion = '14.3.2'
 $DefaultUpdateSource = 'github:rhedv42-sudo/pc-tools@stable'
 # Portabel (USB-Stick): Datei portable.txt neben dem Skript -> Einstellungen/Protokolle im Ordner Daten auf dem Stick
 $Script:IsPortable = [bool]($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'portable.txt')))
@@ -21992,6 +21992,7 @@ $pageSecurity = New-Page 'Sicherheit' 'Alle Schutzfunktionen dieses PCs auf eine
 
 # ---------------------------------------------------------------- Handbuch (wird mit jeder Version gepflegt)
 $ManualNews = @(
+    'Version 14.3.2: Port-Scanner und Sicherheits-Scan prüfen nur noch Adressen im eigenen Netz (z.B. 192.168.x.x, 10.x.x.x) - fremde Adressen im Internet werden nie gescannt. Das Setup zeigt vor der Installation die Datenschutz-Hinweise.',
     'Version 14.3.1: Alle neuen Funktionen seit 14.0 (KI-Assistent, Punkte beheben, Startzeit-Analyse, Hilfe holen, Einfach-Modus, Passwort-Check, BitLocker-Assistent) sind jetzt in allen 12 Sprachen übersetzt.',
     'Version 14.3: Neu auf der Seite Sicherheit - Passwort-Check: prüft einzelne Passwörter oder alle aus dem Browser exportierten gegen bekannte Datenlecks (Have I Been Pwned). Das Passwort verlässt den PC nie, nur 5 Zeichen seines Fingerabdrucks. Zeigt auch mehrfach verwendete und zu einfache Passwörter und löscht die Export-Datei danach sicher. Neu: BitLocker-Assistent - prüft TPM, Edition, Secure Boot und Netzteil, verschlüsselt und legt den Wiederherstellungsschlüssel an mehreren Orten ab (USB-Stick, Ordner/NAS, Microsoft- oder Firmenkonto, Ausdruck, Lizenz-Tresor) und kontrolliert jede Kopie.',
     'Version 14.2: Neu "Hilfe holen" - beim Zustands-Score und im Einfach-Modus. Ein Klick schickt dem Helfer einen Bericht (Zustand, Probleme, Fehler der letzten 3 Tage, Protokoll): in "Meine PCs" erscheint ein roter Hilferuf mit Bericht, aufs Handy kommt eine Nachricht (wenn eingerichtet), auf Wunsch wird eine E-Mail vorbereitet - sonst liegt der Bericht auf dem Desktop. Neu: Einfach-Modus für Eltern, Großeltern und Einsteiger - nur eine große Ampel und zwei Knöpfe "Alles reparieren" und "Hilfe holen" (Einstellungen > Stabilität oder beim ersten Start).',
@@ -44038,7 +44039,18 @@ function Expand-ScanTargets([string]$Spec) {
             for ($i = $s; $i -le $e; $i++) { $out.Add($pre + $i) }
         } else { $out.Add($p) }
     }
-    return , $out.ToArray()
+    # Nur das eigene Netz: private Adressbereiche (RFC 1918), CGNAT/Tailscale und Loopback - fremde Adressen im Internet werden nie gescannt
+    $ok = [System.Collections.Generic.List[string]]::new()
+    foreach ($t in $out) {
+        $ips = @(); if ($t -match '^\d{1,3}(\.\d{1,3}){3}$') { $ips = @($t) } else { try { $ips = @([Net.Dns]::GetHostAddresses($t) | Where-Object { $_.AddressFamily -eq 'InterNetwork' } | ForEach-Object { $_.ToString() }) } catch { } }
+        if ($ips.Count -and @($ips | Where-Object { -not (Test-ScanTargetPrivate $_) }).Count -eq 0) { $ok.Add($t) }
+    }
+    return , $ok.ToArray()
+}
+function Test-ScanTargetPrivate([string]$Ip) {
+    $a = $null; if (-not [Net.IPAddress]::TryParse($Ip, [ref]$a)) { return $false }
+    $b = $a.GetAddressBytes(); if ($b.Count -ne 4) { return $false }
+    return ($b[0] -eq 10) -or ($b[0] -eq 127) -or ($b[0] -eq 192 -and $b[1] -eq 168) -or ($b[0] -eq 172 -and $b[1] -ge 16 -and $b[1] -le 31) -or ($b[0] -eq 100 -and $b[1] -ge 64 -and $b[1] -le 127) -or ($b[0] -eq 169 -and $b[1] -eq 254)
 }
 function Get-ScanPorts([string]$Spec) {
     $s = ([string]$Spec).Trim()
@@ -44074,7 +44086,7 @@ function Test-PortsOnHost([string]$Ip, [int[]]$Ports, [int]$TimeoutMs, [string]$
 }
 function Invoke-PortScanText([string]$Spec, [string]$PortSpec, [string]$CancelFile) {
     $targets = @(Expand-ScanTargets $Spec); $ports = @(Get-ScanPorts $PortSpec)
-    if (-not $targets.Count) { return 'Kein gültiges Ziel.' }
+    if (-not $targets.Count) { return 'Kein gültiges Ziel. Gescannt werden nur Adressen im eigenen Netz (z.B. 192.168.x.x, 10.x.x.x, 172.16-31.x.x).' }
     $o = [System.Collections.Generic.List[string]]::new()
     $o.Add(('Port-Scan: {0} Ziel(e), {1} Port(s) je Ziel, Zeitlimit 350 ms.' -f $targets.Count, $ports.Count)); $o.Add('')
     $tmo = if ($ports.Count -gt 2000) { 250 } else { 350 }
@@ -44118,7 +44130,7 @@ function Get-SecRisk([int]$Port) {
 }
 function Invoke-SecScanText([string]$Spec, [string]$CancelFile) {
     $targets = @(Expand-ScanTargets $Spec)
-    if (-not $targets.Count) { return 'Kein gültiges Ziel.' }
+    if (-not $targets.Count) { return 'Kein gültiges Ziel. Gescannt werden nur Adressen im eigenen Netz (z.B. 192.168.x.x, 10.x.x.x, 172.16-31.x.x).' }
     $o = [System.Collections.Generic.List[string]]::new()
     $o.Add(('Sicherheits-Scan: {0} Adresse(n) werden geprüft (Geräte finden, dann riskante Dienste).' -f $targets.Count)); $o.Add('')
     # 1. Lebende Hosts finden (paralleler Ping)
@@ -44166,7 +44178,7 @@ if ($ui.ScanOut) {
             $ui.ScanOut.Text = [string]@($res | Where-Object { $null -ne $_ })[-1]; $ui.ScanState.Text = $Script:ScanTitle + ' - fertig (' + (Get-Date -Format 'HH:mm:ss') + ')'
         }
     }
-    $scanFns = @('Invoke-PortScanText', 'Invoke-SecScanText', 'Expand-ScanTargets', 'Get-ScanPorts', 'Get-PortService', 'Test-PortsOnHost', 'Get-SecRisk')
+    $scanFns = @('Invoke-PortScanText', 'Invoke-SecScanText', 'Expand-ScanTargets', 'Test-ScanTargetPrivate', 'Get-ScanPorts', 'Get-PortService', 'Test-PortsOnHost', 'Get-SecRisk')
     $ui.BtnScanPort.Add_Click({ $t = [string]$ui.ScanTarget.Text; $p = [string]$ui.ScanPorts.Text; if ($p -match 'ALLE' -and -not (Confirm-Ui 'Alle 65535 Ports scannen? Das kann je Ziel eine Weile dauern.')) { return }; & $Start_Scan 'Port-Scanner' { param($a, $b, $c) Invoke-PortScanText $a $b $c } $scanFns @($t, $p, $Script:ScanCancel) })
     $ui.BtnScanSec.Add_Click({ $t = [string]$ui.ScanTarget.Text; & $Start_Scan 'Sicherheits-Scan' { param($a, $c) Invoke-SecScanText $a $c } $scanFns @($t, $Script:ScanCancel) })
     $ui.BtnScanStop.Add_Click({ try { Set-Content -LiteralPath $Script:ScanCancel -Value '1' -ErrorAction SilentlyContinue } catch { }; $ui.ScanState.Text = 'Wird abgebrochen ...' })
