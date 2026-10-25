@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Auto, [switch]$Run, [string]$Parts = '', [switch]$Analyze, [switch]$CheckOnly, [string]$RunId = '', [string]$AppsFile = '', [string]$WingetFile = '', [string]$DirectFile = '', [string]$Monitor = '', [switch]$DeskArrange, [string]$Topology = '', [int]$Delay = 0, [switch]$Silent, [switch]$Install, [string]$JobFile = '', [switch]$Backup, [switch]$FleetPoll, [string]$FirstLogon = '', [switch]$NetDiag, [switch]$TbSync, [switch]$WinRepair, [switch]$NetDeep, [string]$DeepOpts = '', [switch]$FullBackup, [switch]$FullRepair, [switch]$NetDoc, [switch]$Sign, [string]$SignOpts = '', [string]$ChocoFile = '')
 
-$AppVersion = '14.3.2'
+$AppVersion = '14.3.3'
 $DefaultUpdateSource = 'github:rhedv42-sudo/pc-tools@stable'
 # Portabel (USB-Stick): Datei portable.txt neben dem Skript -> Einstellungen/Protokolle im Ordner Daten auf dem Stick
 $Script:IsPortable = [bool]($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'portable.txt')))
@@ -2058,9 +2058,21 @@ function Get-GitHubHeaders([string]$Accept = 'application/vnd.github+json') {
 function Invoke-GitHubRaw($Gh, [string]$Path, [string]$OutFile = '') {
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
     $uri = 'https://api.github.com/repos/{0}/contents/{1}?ref={2}' -f $Gh.Repo, $Path, $Gh.Branch
-    $h = Get-GitHubHeaders 'application/vnd.github.raw'
-    if ($OutFile) { Invoke-WebRequest -Uri $uri -Headers $h -OutFile $OutFile -UseBasicParsing -TimeoutSec 300 | Out-Null; return }
-    $r = Invoke-WebRequest -Uri $uri -Headers $h -UseBasicParsing -TimeoutSec 30
+    $pub = 'https://raw.githubusercontent.com/{0}/{1}/{2}' -f $Gh.Repo, $Gh.Branch, $Path
+    # Öffentliches Repository (pc-tools): geht auch ohne Token. Fehlt der Token oder passt er nicht (z.B. nur für das alte pc-pflege), direkt öffentlich laden.
+    $h = $null; try { $h = Get-GitHubHeaders 'application/vnd.github.raw' } catch { }
+    $r = $null
+    if ($h) {
+        try {
+            if ($OutFile) { Invoke-WebRequest -Uri $uri -Headers $h -OutFile $OutFile -UseBasicParsing -TimeoutSec 300 | Out-Null; return }
+            $r = Invoke-WebRequest -Uri $uri -Headers $h -UseBasicParsing -TimeoutSec 30
+        } catch { $r = $null }
+    }
+    if (-not $r) {
+        $nc = @{ 'User-Agent' = 'PC-Tools'; 'Cache-Control' = 'no-cache' }
+        if ($OutFile) { Invoke-WebRequest -Uri $pub -Headers $nc -OutFile $OutFile -UseBasicParsing -TimeoutSec 300 | Out-Null; return }
+        $r = Invoke-WebRequest -Uri $pub -Headers $nc -UseBasicParsing -TimeoutSec 30
+    }
     $c = $r.Content
     if ($c -is [byte[]]) { $c = [Text.Encoding]::UTF8.GetString($c) }
     return ([string]$c).TrimStart([char]0xFEFF)
@@ -20104,6 +20116,20 @@ function Invoke-AiMessages([string]$Key, [byte[]]$Body, [string]$Url, [string]$V
         if ($res.Status -in 500, 502, 503, 529 -and $try -lt 2) { Start-Sleep -Seconds 4; continue }
         break
     }
+    # Ollama: gewähltes Modell fehlt -> ein vorhandenes Modell nehmen, sonst das Modell selbst laden (ohne Zutun des Benutzers)
+    if ($local -and [int]$res.Status -eq 404 -and ([string]$res.Body + [string]$res.Error) -match 'not found') {
+        try {
+            $txt = [Text.Encoding]::UTF8.GetString($Body)
+            $want = ''; if ($txt -match '"model"\s*:\s*"([^"]+)"') { $want = $Matches[1] }
+            $have = @((Get-OllamaState).Models)
+            $use = @($have | Where-Object { $_ -notmatch 'embed' })[0]
+            if (-not $use -and $want) { $null = Install-OllamaModel $want; if (@((Get-OllamaState).Models | Where-Object { $_ -eq $want -or $_ -eq ($want + ':latest') }).Count) { $use = $want } }
+            if ($use) {
+                $b2 = [Text.Encoding]::UTF8.GetBytes(([regex]'"model"\s*:\s*"[^"]+"').Replace($txt, ('"model":"{0}"' -f $use), 1))
+                $res = Invoke-AiHttp 'POST' $Url $h $b2 $TimeoutSec -NoProxy:$local
+            }
+        } catch { }
+    }
     return $res
 }
 
@@ -21992,6 +22018,7 @@ $pageSecurity = New-Page 'Sicherheit' 'Alle Schutzfunktionen dieses PCs auf eine
 
 # ---------------------------------------------------------------- Handbuch (wird mit jeder Version gepflegt)
 $ManualNews = @(
+    'Version 14.3.3: Updates kommen jetzt auch ohne bzw. mit einem alten GitHub-Token an (öffentliches Repository). KI mit Ollama: Ist das gewählte Modell nicht geladen, nimmt PC-Tools automatisch ein vorhandenes oder lädt es selbst.',
     'Version 14.3.2: Port-Scanner und Sicherheits-Scan prüfen nur noch Adressen im eigenen Netz (z.B. 192.168.x.x, 10.x.x.x) - fremde Adressen im Internet werden nie gescannt. Das Setup zeigt vor der Installation die Datenschutz-Hinweise.',
     'Version 14.3.1: Alle neuen Funktionen seit 14.0 (KI-Assistent, Punkte beheben, Startzeit-Analyse, Hilfe holen, Einfach-Modus, Passwort-Check, BitLocker-Assistent) sind jetzt in allen 12 Sprachen übersetzt.',
     'Version 14.3: Neu auf der Seite Sicherheit - Passwort-Check: prüft einzelne Passwörter oder alle aus dem Browser exportierten gegen bekannte Datenlecks (Have I Been Pwned). Das Passwort verlässt den PC nie, nur 5 Zeichen seines Fingerabdrucks. Zeigt auch mehrfach verwendete und zu einfache Passwörter und löscht die Export-Datei danach sicher. Neu: BitLocker-Assistent - prüft TPM, Edition, Secure Boot und Netzteil, verschlüsselt und legt den Wiederherstellungsschlüssel an mehreren Orten ab (USB-Stick, Ordner/NAS, Microsoft- oder Firmenkonto, Ausdruck, Lizenz-Tresor) und kontrolliert jede Kopie.',
