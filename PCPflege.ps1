@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Auto, [switch]$Run, [string]$Parts = '', [switch]$Analyze, [switch]$CheckOnly, [string]$RunId = '', [string]$AppsFile = '', [string]$WingetFile = '', [string]$DirectFile = '', [string]$Monitor = '', [switch]$DeskArrange, [string]$Topology = '', [int]$Delay = 0, [switch]$Silent, [switch]$Install, [string]$JobFile = '', [switch]$Backup, [switch]$FleetPoll, [string]$FirstLogon = '', [switch]$NetDiag, [switch]$TbSync, [switch]$WinRepair, [switch]$NetDeep, [string]$DeepOpts = '', [switch]$FullBackup, [switch]$FullRepair, [switch]$NetDoc, [switch]$Sign, [string]$SignOpts = '', [string]$ChocoFile = '')
 
-$AppVersion = '14.3'
+$AppVersion = '14.3.1'
 $DefaultUpdateSource = 'github:rhedv42-sudo/pc-tools@stable'
 # Portabel (USB-Stick): Datei portable.txt neben dem Skript -> Einstellungen/Protokolle im Ordner Daten auf dem Stick
 $Script:IsPortable = [bool]($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'portable.txt')))
@@ -21992,6 +21992,7 @@ $pageSecurity = New-Page 'Sicherheit' 'Alle Schutzfunktionen dieses PCs auf eine
 
 # ---------------------------------------------------------------- Handbuch (wird mit jeder Version gepflegt)
 $ManualNews = @(
+    'Version 14.3.1: Alle neuen Funktionen seit 14.0 (KI-Assistent, Punkte beheben, Startzeit-Analyse, Hilfe holen, Einfach-Modus, Passwort-Check, BitLocker-Assistent) sind jetzt in allen 12 Sprachen übersetzt.',
     'Version 14.3: Neu auf der Seite Sicherheit - Passwort-Check: prüft einzelne Passwörter oder alle aus dem Browser exportierten gegen bekannte Datenlecks (Have I Been Pwned). Das Passwort verlässt den PC nie, nur 5 Zeichen seines Fingerabdrucks. Zeigt auch mehrfach verwendete und zu einfache Passwörter und löscht die Export-Datei danach sicher. Neu: BitLocker-Assistent - prüft TPM, Edition, Secure Boot und Netzteil, verschlüsselt und legt den Wiederherstellungsschlüssel an mehreren Orten ab (USB-Stick, Ordner/NAS, Microsoft- oder Firmenkonto, Ausdruck, Lizenz-Tresor) und kontrolliert jede Kopie.',
     'Version 14.2: Neu "Hilfe holen" - beim Zustands-Score und im Einfach-Modus. Ein Klick schickt dem Helfer einen Bericht (Zustand, Probleme, Fehler der letzten 3 Tage, Protokoll): in "Meine PCs" erscheint ein roter Hilferuf mit Bericht, aufs Handy kommt eine Nachricht (wenn eingerichtet), auf Wunsch wird eine E-Mail vorbereitet - sonst liegt der Bericht auf dem Desktop. Neu: Einfach-Modus für Eltern, Großeltern und Einsteiger - nur eine große Ampel und zwei Knöpfe "Alles reparieren" und "Hilfe holen" (Einstellungen > Stabilität oder beim ersten Start).',
     'Version 14.1: Treiber für Geräte mit Problem (z.B. Code 48/28) sucht PC-Tools jetzt gezielt - erst über Windows Update, dann über das offizielle Treiberpaket von HP, Lenovo oder Dell (Seite Geräte und "Punkte beheben"). Neu auf der Seite Autostart: Startzeit-Analyse zeigt, welche Programme, Dienste und Treiber den Start wie viele Sekunden bremsen, und entschärft sie mit einem Klick. Beim Zustands-Score: "Automatisch beheben, wenn der Score unter ... fällt" - nach jedem geplanten Lauf wird erledigt, was sicher automatisch geht, der Rest kommt als Hinweis.',
