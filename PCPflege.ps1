@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Auto, [switch]$Run, [string]$Parts = '', [switch]$Analyze, [switch]$CheckOnly, [string]$RunId = '', [string]$AppsFile = '', [string]$WingetFile = '', [string]$DirectFile = '', [string]$Monitor = '', [switch]$DeskArrange, [string]$Topology = '', [int]$Delay = 0, [switch]$Silent, [switch]$Install, [string]$JobFile = '', [switch]$Backup, [switch]$FleetPoll, [string]$FirstLogon = '', [switch]$NetDiag, [switch]$TbSync, [switch]$WinRepair, [switch]$NetDeep, [string]$DeepOpts = '', [switch]$FullBackup, [switch]$FullRepair, [switch]$NetDoc, [switch]$Sign, [string]$SignOpts = '', [string]$ChocoFile = '')
 
-$AppVersion = '14.0'
+$AppVersion = '14.0.1'
 $DefaultUpdateSource = 'github:rhedv42-sudo/pc-tools@stable'
 # Portabel (USB-Stick): Datei portable.txt neben dem Skript -> Einstellungen/Protokolle im Ordner Daten auf dem Stick
 $Script:IsPortable = [bool]($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'portable.txt')))
@@ -8015,6 +8015,21 @@ $KsRoles = @(
 # Bestandteile des Scores: Schlüssel, Anzeigename, Spaltenname in Score.csv (ohne Umlaute). Als Funktion, damit es auch in Invoke-Bg-Runspaces verfügbar ist.
 function Get-ScComponentDefs { @(@('Security', 'Sicherheit', 'Sicherheit'), @('Updates', 'Updates', 'Updates'), @('Space', 'Speicherplatz', 'Speicherplatz'), @('Disk', 'Datenträger', 'Datentraeger'), @('Battery', 'Akku', 'Akku'), @('Stability', 'Stabilität', 'Stabilitaet'), @('Boot', 'Startzeit', 'Startzeit'), @('Devices', 'Geräte', 'Geraete'), @('Temp', 'Temperatur', 'Temperatur')) }
 
+# Schnelle, sichere Reparaturen für "Punkte beheben" (läuft im Hintergrund)
+function Invoke-ScQuickFixes([string[]]$Acts) {
+    $o = [System.Collections.Generic.List[string]]::new()
+    if ($Acts -contains 'AvSig') {
+        try { Update-MpSignature -ErrorAction Stop; $o.Add('Virendefinitionen aktualisiert.') } catch { $o.Add('Virendefinitionen: ' + $_.Exception.Message) }
+    }
+    if ($Acts -contains 'Firewall') {
+        try { Set-NetFirewallProfile -Profile Domain, Private, Public -Enabled True -ErrorAction Stop; $o.Add('Firewall für alle Netzwerkprofile eingeschaltet.') } catch { $o.Add('Firewall: ' + $_.Exception.Message) }
+    }
+    if ($Acts -contains 'Devices') {
+        try { $r = Repair-DevIssues; $o.Add(([string]$r.Text).Trim()) } catch { $o.Add('Geräte: ' + $_.Exception.Message) }
+        try { $null = & pnputil.exe /scan-devices 2>&1; $o.Add('Geräte neu erkannt (Treiber werden beim Update-Lauf mit gesucht).') } catch { }
+    }
+    return ($o -join "`r`n")
+}
 function Get-ScHealthScore {
     # SecScore: Ergebnis der ausführlichen Sicherheitsprüfung (Seite Sicherheit, 0-100) - wenn vorhanden, wird es übernommen (-1 = selbst schnell prüfen)
     param([int]$SecScore = -1)
@@ -8069,8 +8084,20 @@ function Get-ScHealthScore {
         $reboot = (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')
         if (-not $reboot) { try { $reboot = [bool](New-Object -ComObject Microsoft.Update.SystemInfo).RebootRequired } catch { } }
         if ($reboot) { $why.Add('Neustart ausstehend - Updates noch nicht fertig installiert') } else { $up += 3 }
-        $fail = 0; try { $fail = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-WindowsUpdateClient'; Id = 20; StartTime = (Get-Date).AddDays(-30) } -ErrorAction Stop).Count } catch { }
-        if ($fail) { $why.Add(('{0} fehlgeschlagene Installation(en) in 30 Tagen' -f $fail)) } else { $up += 2 }
+        # nur Fehlschläge zählen, die seitdem nicht doch noch erfolgreich installiert wurden (gleiche Update-ID)
+        $fail = 0
+        try {
+            $wev = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-WindowsUpdateClient'; Id = 19, 20; StartTime = (Get-Date).AddDays(-30) } -ErrorAction Stop)
+            $okAt = @{}; $failAt = @{}
+            foreach ($e in $wev) {
+                $g = ''; try { foreach ($n in ([xml]$e.ToXml()).Event.EventData.Data) { if ([string]$n.Name -eq 'updateGuid') { $g = [string]$n.'#text' } } } catch { }
+                if (-not $g) { $g = [string]$e.RecordId }
+                if ($e.Id -eq 19) { if (-not $okAt.ContainsKey($g) -or $e.TimeCreated -gt $okAt[$g]) { $okAt[$g] = $e.TimeCreated } }
+                else { if (-not $failAt.ContainsKey($g) -or $e.TimeCreated -gt $failAt[$g]) { $failAt[$g] = $e.TimeCreated } }
+            }
+            foreach ($g in @($failAt.Keys)) { if (-not ($okAt.ContainsKey($g) -and $okAt[$g] -gt $failAt[$g])) { $fail++ } }
+        } catch { }
+        if ($fail) { $why.Add(('{0} Update(s) in 30 Tagen fehlgeschlagen und noch nicht nachinstalliert' -f $fail)) } else { $up += 2 }
         Add-ScPart 'Updates' 'Updates' 15 $up ($why -join ' · ')
     } catch { Add-ScPart 'Updates' 'Updates' 15 7.5 ('Prüfung fehlgeschlagen: ' + $_.Exception.Message) }
 
@@ -21688,6 +21715,7 @@ $pageSecurity = New-Page 'Sicherheit' 'Alle Schutzfunktionen dieses PCs auf eine
 
 # ---------------------------------------------------------------- Handbuch (wird mit jeder Version gepflegt)
 $ManualNews = @(
+    'Version 14.0.1: Neuer Knopf "Punkte beheben" beim Zustands-Score - behebt mit einem Klick alles, was automatisch geht (Updates und Treiber nachinstallieren, Aufräumen, Autostart aufräumen, Geräte-Probleme, Virendefinitionen, Firewall) und sagt ehrlich, was nur von Hand geht (z.B. Secure Boot im BIOS). Fehlgeschlagene Updates zählen im Score nur noch, wenn sie seitdem nicht doch erfolgreich installiert wurden.',
     'Version 14.0: PC-Tools spricht jetzt 12 Sprachen - Deutsch, English, Español, Français, Italiano, Português (Brasil), Polski, Türkçe, Русский, 简体中文, 日本語 und 한국어. Die Sprache wählst du beim ersten Start oder jederzeit unter Einstellungen > Stabilität > Sprache; auch der KI-Assistent antwortet in deiner Sprache. Die Übersetzungen sind maschinell (KI) erstellt - Fehler bitte über "Übersetzungsfehler melden" mitteilen. Dazu: PC-Tools.exe, Installationsprogramm und die Linux-Ausgabe.',
     'Version 13.9.2: Das Symbol in der Taskleiste ist repariert (eigenes PC-Tools-Symbol in allen Größen, auch beim Anheften). Neu: PC-Tools.exe als Starter und ein Installationsprogramm (PC-Tools-Setup.exe) - und die ersten Sprachen: English, Español, Русский und 简体中文 (Einstellungen > Stabilität > Sprache). Weitere Sprachen folgen mit Version 14.',
     'Version 13.9.1: "Nicht genutzte Programme" entfernt jetzt auch Programme ohne stillen Deinstallationsweg: erst still (MSI, Inno, NSIS, electron-builder, WiX, Squirrel), dann über winget, dann über das Deinstallationsprogramm des Herstellers, bei portablen Programmen ohne Deinstaller werden Ordner (Papierkorb) und Eintrag (gesichert) entfernt. Vorbereitung für die Mehrsprachigkeit von Version 14.',
@@ -23249,7 +23277,7 @@ $pageScoreCard = @'
     <Grid Margin="0,0,0,10">
       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
       <StackPanel Orientation="Horizontal" VerticalAlignment="Center"><Border Width="4" Height="16" CornerRadius="2" Margin="0,0,10,0" VerticalAlignment="Center" Background="{StaticResource AccentGrad}"/><TextBlock Text="Zustands-Score" FontSize="16" FontWeight="SemiBold" Foreground="#1F2A44" VerticalAlignment="Center"/><TextBlock x:Name="ScInfo" Text="" FontSize="12" Foreground="#6B7890" Margin="12,0,0,0" VerticalAlignment="Center"/></StackPanel>
-      <StackPanel Grid.Column="1" Orientation="Horizontal"><Button x:Name="BtnScHistory" Content="Verlauf" Style="{StaticResource Sec}" Padding="12,5" Margin="0,0,8,0" VerticalAlignment="Center"/><Button x:Name="BtnScRefresh" Content="Neu berechnen" Style="{StaticResource Sec}" Padding="12,5" Margin="0" VerticalAlignment="Center"/></StackPanel>
+      <StackPanel Grid.Column="1" Orientation="Horizontal"><Button x:Name="BtnScFix" Content="Punkte beheben" Padding="12,5" Margin="0,0,8,0" VerticalAlignment="Center" ToolTip="Behebt mit einem Klick alles, was sich automatisch beheben lässt (vorher kommt eine Übersicht)"/><Button x:Name="BtnScHistory" Content="Verlauf" Style="{StaticResource Sec}" Padding="12,5" Margin="0,0,8,0" VerticalAlignment="Center"/><Button x:Name="BtnScRefresh" Content="Neu berechnen" Style="{StaticResource Sec}" Padding="12,5" Margin="0" VerticalAlignment="Center"/></StackPanel>
     </Grid>
     <Grid>
       <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="260"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -35846,6 +35874,65 @@ function Show-ScHistory {
 }
 $ui.BtnScRefresh.Add_Click({ Update-ScScoreUi })
 $ui.BtnScHistory.Add_Click({ try { Show-ScHistory } catch { Show-UiError ('Verlauf: ' + $_.Exception.Message) } })
+# ---- "Punkte beheben": alles, was sich sicher automatisch beheben lässt, mit einem Klick
+function Start-ScFixAll {
+    if ($script:Job) { Show-UiError 'Es läuft bereits eine Aufgabe - bitte warten, bis sie fertig ist.'; return }
+    $res = $script:ScLast
+    if (-not $res) { Show-UiError 'Der Zustands-Score wird noch berechnet - bitte gleich noch einmal klicken.'; return }
+    $parts = @($res.Components | Where-Object { $_ -and [double]$_.Max -gt 0 -and [double]$_.Points -lt [double]$_.Max })
+    $plan = [System.Collections.Generic.List[string]]::new(); $hand = [System.Collections.Generic.List[string]]::new()
+    $acts = [System.Collections.Generic.List[string]]::new(); $run = [System.Collections.Generic.List[string]]::new()
+    $autoMin = $false; $bitlocker = $false
+    foreach ($p in $parts) {
+        $why = [string]$p.Reason
+        switch ([string]$p.Key) {
+            'Security' {
+                if ($why -match 'Virendefinitionen veraltet') { $acts.Add('AvSig'); $plan.Add('Virendefinitionen aktualisieren') }
+                if ($why -match 'Firewall aus') { $acts.Add('Firewall'); $plan.Add('Firewall wieder einschalten') }
+                if ($why -match 'nicht verschlüsselt') { $bitlocker = $true; $plan.Add('Verschlüsselung (BitLocker) öffnen - dort mit einem Klick einschalten, den Wiederherstellungsschlüssel bitte sicher aufbewahren') }
+                if ($why -match 'Secure Boot aus') { $hand.Add('Secure Boot lässt sich nur im BIOS/UEFI des PCs einschalten (Seite "BIOS"). Vorher prüfen, dass Windows im UEFI-Modus installiert ist - sonst startet der PC danach nicht.') }
+                if ($why -match 'KEIN Virenschutz') { $hand.Add('Kein Virenschutz aktiv: Seite "Sicherheit" öffnen und Microsoft Defender einschalten.') }
+            }
+            'Updates' { if (-not $run.Contains('Update')) { $run.Add('Update'); $plan.Add('Windows-, Treiber- und Programm-Updates installieren (fehlgeschlagene Updates werden erneut versucht)') } }
+            'Space' { $run.Add('Clean'); $plan.Add('Aufräumen (temporäre Dateien, Caches, Papierkorb)') }
+            'Boot' { $autoMin = $true; $plan.Add('Autostart aufräumen: überflüssige Programme beim Start abschalten (schnellerer Start; jederzeit rückgängig auf der Seite Autostart)') }
+            'Devices' {
+                $acts.Add('Devices'); $plan.Add('Geräte-Probleme reparieren und Geräte neu erkennen')
+                if (-not $run.Contains('Update')) { $run.Add('Update'); $plan.Add('Treiber-Updates suchen und installieren (für Geräte ohne passenden Treiber)') }
+                if ($why -match 'Code 48|Code 28|Code 10') { $hand.Add('Bleibt ein Gerät mit Code 48/28 übrig, braucht es einen neueren Treiber vom Hersteller (Seite "Treiber" > Hersteller-Tool).') }
+            }
+            'Disk' { $hand.Add('Datenträger: Verschleiß oder Lesefehler lassen sich nicht reparieren - bitte Daten sichern (Seite "Datensicherung").') }
+            'Stability' { $hand.Add('Abstürze: Der KI-Assistent erklärt die Ursache ("Warum stürzt mein PC ab?").') }
+            'Temp' { $hand.Add('Temperatur: Lüfter und Luftschlitze reinigen, PC nicht auf weicher Unterlage betreiben.') }
+            'Battery' { $hand.Add('Akku: Verschleiß lässt sich nicht reparieren - Seite "Akku und Energie" zeigt Tipps.') }
+        }
+    }
+    if (-not $plan.Count -and -not $hand.Count) { [Windows.MessageBox]::Show((T 'Alles in Ordnung - es gibt nichts zu beheben.'), 'PC-Tools', 'OK', 'Information') | Out-Null; return }
+    if (-not $plan.Count) { [Windows.MessageBox]::Show((T ("Automatisch lässt sich hier nichts beheben. Von Hand:`n`n- " + ($hand -join "`n- "))), 'PC-Tools', 'OK', 'Information') | Out-Null; return }
+    $msg = "Das wird jetzt erledigt:`n`n- " + ($plan -join "`n- ")
+    if ($hand.Count) { $msg += "`n`nNur von Hand möglich (zur Info):`n- " + ($hand -join "`n- ") }
+    $msg += "`n`nVorher wird ein Wiederherstellungspunkt erstellt. Jetzt starten?"
+    if (-not (Confirm-Ui $msg)) { return }
+    $ui.BtnScFix.IsEnabled = $false
+    $ui.ScInfo.Text = 'Punkte werden behoben ...'
+    try { $null = Invoke-UiWait { Checkpoint-Computer -Description 'PC-Tools: Punkte beheben' -RestorePointType MODIFY_SETTINGS -ErrorAction SilentlyContinue } @() @() 180 'Wiederherstellungspunkt wird erstellt ...' } catch { }
+    if ($autoMin) { try { $null = Set-AutoBulk 'Recommended' -NoConfirm } catch { } }
+    if ($bitlocker) { try { Start-Process 'control.exe' '/name Microsoft.BitLockerDriveEncryption' } catch { try { Start-Process 'ms-settings:deviceencryption' } catch { } } }
+    $script:ScFixRun = @($run)
+    if ($acts.Count) {
+        Invoke-Bg -Script { param($a) Invoke-ScQuickFixes $a } -Arguments @(, [string[]]$acts.ToArray()) -Functions @('Invoke-ScQuickFixes') -Done {
+            param($r, $e)
+            $t = (@($r | Where-Object { $_ -is [string] }) -join "`r`n")
+            $ui.StatusText.Text = 'Punkte beheben: ' + $(if ($e) { $e.Message } else { ($t -split "`r?`n" | Where-Object { $_ } | Select-Object -First 1) })
+            $ui.BtnScFix.IsEnabled = $true
+            if ($script:ScFixRun.Count -and -not $script:Job) { $null = Start-Run -Parts $script:ScFixRun } else { Update-ScScoreUi }
+        }
+    } else {
+        $ui.BtnScFix.IsEnabled = $true
+        if ($run.Count) { $null = Start-Run -Parts $run.ToArray() } else { Update-ScScoreUi }
+    }
+}
+$ui.BtnScFix.Add_Click({ try { Start-ScFixAll } catch { $ui.BtnScFix.IsEnabled = $true; Show-UiError ('Punkte beheben: ' + $_.Exception.Message) } })
 $ui.ScSpark.Add_SizeChanged({ param($s, $e) if ($e.WidthChanged -and $script:ScSparkRows) { try { Update-ScSpark @($script:ScSparkRows) } catch { } } })
 try { Show-ScCached } catch { }
 $window.Add_Loaded({
