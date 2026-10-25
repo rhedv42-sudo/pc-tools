@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Auto, [switch]$Run, [string]$Parts = '', [switch]$Analyze, [switch]$CheckOnly, [string]$RunId = '', [string]$AppsFile = '', [string]$WingetFile = '', [string]$DirectFile = '', [string]$Monitor = '', [switch]$DeskArrange, [string]$Topology = '', [int]$Delay = 0, [switch]$Silent, [switch]$Install, [string]$JobFile = '', [switch]$Backup, [switch]$FleetPoll, [string]$FirstLogon = '', [switch]$NetDiag, [switch]$TbSync, [switch]$WinRepair, [switch]$NetDeep, [string]$DeepOpts = '', [switch]$FullBackup, [switch]$FullRepair, [switch]$NetDoc, [switch]$Sign, [string]$SignOpts = '', [string]$ChocoFile = '')
 
-$AppVersion = '14.1'
+$AppVersion = '14.2'
 $DefaultUpdateSource = 'github:rhedv42-sudo/pc-tools@stable'
 # Portabel (USB-Stick): Datei portable.txt neben dem Skript -> Einstellungen/Protokolle im Ordner Daten auf dem Stick
 $Script:IsPortable = [bool]($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'portable.txt')))
@@ -1565,6 +1565,7 @@ function Get-DefaultConfig {
         OneClick = [ordered]@{ Updates = $true; Drivers = $true; Programs = $true; Repair = $true; AutoRepair = $false }
         DriverSafety = [ordered]@{ Enabled = $true; Keep = 5 }
         AutoFix = [ordered]@{ Enabled = $true; Below = 85 }
+        Help = [ordered]@{ Mail = '' }
         Assistant = [ordered]@{ Provider = ''; Model = ''; CustomUrl = ''; AutoDiag = $true; AutoCloud = $false; Weekly = $true; Speak = $false; SaveChat = $true; Memory = $true; KeyScope = 'Nur mein Windows-Konto'; MonthlyLimit = 0; MaxTokens = 1024; CtxPage = $true; CtxSystem = $false; CtxHealth = $false; CtxLog = $false; CtxSelection = $true; ErrorButton = $true }
         Integrate = [ordered]@{ MqttEnabled = $false; MqttHost = ''; MqttPort = 1883; MqttUser = ''; MqttTopic = 'pcpflege'; HaEnabled = $false; HaUrl = ''; RmmEnabled = $false; RmmUrl = '' }
         Notify = [ordered]@{ Enabled = $false; Ntfy = ''; HaWebhook = ''; ChatWebhook = ''; OnRed = $true; OnWarn = $true; OnBackup = $true; OnBluescreen = $true; OnRecover = $true }
@@ -4237,6 +4238,82 @@ function Write-FleetStatus($Items, [int]$SecScore = -1) {
         FullBackup = $(try { Get-FbFleetInfo } catch { $null })
     } | ForEach-Object { Add-FdStatusFields $_ $old $dir $SecScore } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath ($f + '.tmp') -Encoding UTF8
     Move-Item -LiteralPath ($f + '.tmp') -Destination $f -Force
+}
+# ---- Hilfe anfordern (14.2): Bericht mit Score, Problemen, Fehlern und Protokoll an den Helfer
+function New-HelpReport([string]$Msg = '', $Score = $null) {
+    $os = Get-CimInstance Win32_OperatingSystem; $cs = Get-CimInstance Win32_ComputerSystem
+    $reg = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+    $d = New-Object IO.DriveInfo $env:SystemDrive
+    $items = @(); try { $items = @(Get-HealthItems (Get-HealthArgs) | ForEach-Object { $_ } | Where-Object { $_ -and [string]$_.Level -in 'Red', 'Yellow' } | ForEach-Object { [pscustomobject]@{ Level = [string]$_.Level; Text = [string]$_.Text; Detail = [string]$_.Detail } }) } catch { }
+    $sv = -1; $grade = ''; $comps = @()
+    if ($Score) {
+        try { $sv = [int]$Score.Score } catch { }; $grade = [string]$Score.Grade
+        $comps = @(@($Score.Components) | Where-Object { $_ -and [double]$_.Max -gt 0 -and [double]$_.Points -lt [double]$_.Max } | ForEach-Object { [pscustomobject]@{ Name = [string]$_.Name; Points = ('{0:N0}/{1:N0}' -f [double]$_.Points, [double]$_.Max); Reason = [string]$_.Reason } })
+    }
+    $ev = @(); try { $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; Level = 1, 2; StartTime = (Get-Date).AddDays(-3) } -MaxEvents 15 -ErrorAction Stop | ForEach-Object { $m = (([string]$_.Message) -split "`r?`n")[0]; if ($m.Length -gt 180) { $m = $m.Substring(0, 180) + ' ...' }; '{0:dd.MM. HH:mm}  {1} ({2}): {3}' -f $_.TimeCreated, $_.ProviderName, $_.Id, $m }) } catch { }
+    $log = @(); $logName = ''
+    try { $lf = @(Get-ChildItem -LiteralPath (Join-Path $DataDir 'Logs') -Filter '*.log' -File -ErrorAction Stop | Where-Object { $_.Name -ne 'Update-Verlauf.log' } | Sort-Object LastWriteTime -Descending)[0]; if ($lf) { $logName = $lf.Name; $log = @(Get-Content -LiteralPath $lf.FullName -Tail 60 -Encoding UTF8 -ErrorAction Stop) } } catch { }
+    [pscustomobject]@{
+        Schema = 1; Computer = $env:COMPUTERNAME; User = [string]$cs.UserName; Time = (Get-Date).ToString('o'); Version = $AppVersion; Message = $Msg; Status = 'offen'
+        Model = ('{0} {1}' -f $cs.Manufacturer, $cs.Model).Trim(); Windows = ('{0} {1} (Build {2}.{3})' -f $os.Caption, $reg.DisplayVersion, $reg.CurrentBuild, $reg.UBR)
+        DiskFreeGB = [math]::Round($d.AvailableFreeSpace / 1GB, 1); UptimeDays = [math]::Round(((Get-Date) - $os.LastBootUpTime).TotalDays, 1)
+        Score = $sv; Grade = $grade; Components = $comps; Items = $items; Events = $ev; LogName = $logName; Log = $log
+    }
+}
+function Format-HelpReportText($R) {
+    $sb = [System.Text.StringBuilder]::new()
+    $t = try { ([datetime]$R.Time).ToString('dd.MM.yyyy HH:mm') } catch { [string]$R.Time }
+    [void]$sb.AppendLine(('PC-Tools - Hilfe angefordert von {0} ({1})' -f $R.Computer, $R.User))
+    [void]$sb.AppendLine(('Zeit: {0}  ·  PC-Tools {1}' -f $t, $R.Version))
+    [void]$sb.AppendLine(('PC: {0}  ·  {1}' -f $R.Model, $R.Windows))
+    [void]$sb.AppendLine(('C: frei: {0} GB  ·  läuft seit {1} Tagen' -f $R.DiskFreeGB, $R.UptimeDays))
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine('Nachricht:'); [void]$sb.AppendLine($(if ([string]$R.Message) { [string]$R.Message } else { '(keine)' })); [void]$sb.AppendLine('')
+    if ([int]$R.Score -ge 0) { [void]$sb.AppendLine(('Zustands-Score: {0} von 100 ({1})' -f $R.Score, $R.Grade)); foreach ($c in @($R.Components)) { if ($c) { [void]$sb.AppendLine(('  - {0}: {1} - {2}' -f $c.Name, $c.Points, $c.Reason)) } }; [void]$sb.AppendLine('') }
+    [void]$sb.AppendLine('Probleme:'); $it = @(@($R.Items) | Where-Object { $_ }); if ($it.Count) { foreach ($i in $it) { [void]$sb.AppendLine(('  [{0}] {1} - {2}' -f $(if ($i.Level -eq 'Red') { 'dringend' } else { 'Hinweis' }), $i.Text, $i.Detail)) } } else { [void]$sb.AppendLine('  keine') }; [void]$sb.AppendLine('')
+    [void]$sb.AppendLine('Fehler im System-Protokoll (3 Tage):'); $ev = @(@($R.Events) | Where-Object { $_ }); if ($ev.Count) { foreach ($e in $ev) { [void]$sb.AppendLine('  ' + $e) } } else { [void]$sb.AppendLine('  keine') }; [void]$sb.AppendLine('')
+    if (@($R.Log).Count) { [void]$sb.AppendLine(('Letzte Zeilen aus {0}:' -f $R.LogName)); foreach ($l in @($R.Log)) { [void]$sb.AppendLine('  ' + [string]$l) } }
+    $sb.ToString()
+}
+function Send-HelpRequest($R) {
+    $res = [System.Collections.Generic.List[string]]::new()
+    $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $loc = Join-Path $DataDir 'Hilfe'; New-Item $loc -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+    $txt = Join-Path $loc ('Hilfe_{0}.txt' -f $stamp)
+    Set-Content -LiteralPath $txt -Value (Format-HelpReportText $R) -Encoding UTF8
+    $R | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath ([IO.Path]::ChangeExtension($txt, '.json')) -Encoding UTF8
+    $fleet = $false; $notified = $false
+    $cfg = Read-PflegeConfig
+    if ($cfg.Fleet.Enabled -and [string]$cfg.Fleet.Dir) {
+        try {
+            $dir = [string]$cfg.Fleet.Dir; Connect-BackupTarget $dir
+            $hd = Join-Path $dir 'Hilfe'; New-Item $hd -ItemType Directory -Force -ErrorAction Stop | Out-Null
+            $f = Join-Path $hd ('{0}_{1}.json' -f $env:COMPUTERNAME, $stamp)
+            $R | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath ($f + '.tmp') -Encoding UTF8; Move-Item -LiteralPath ($f + '.tmp') -Destination $f -Force
+            $fleet = $true; $res.Add('Meine PCs: Hilferuf abgelegt')
+            try { Write-FleetStatus @(Get-HealthItems (Get-HealthArgs) | ForEach-Object { $_ }) } catch { }
+        } catch { $res.Add('Meine PCs: ' + $_.Exception.Message) }
+    }
+    try {
+        $short = @(); if ([string]$R.Message) { $short += [string]$R.Message }
+        if ([int]$R.Score -ge 0) { $short += ('Score {0}/100' -f $R.Score) }
+        $short += @(@($R.Items) | Where-Object { $_ } | Select-Object -First 4 | ForEach-Object { '- ' + $_.Text })
+        if ($fleet) { $short += 'Bericht unter Meine PCs > Hilferufe.' }
+        $nr = @(Send-PflegeNotify 'Hilfe angefordert' ($short -join "`n") 'Red' -Force)
+        $notified = [bool]@($nr | Where-Object { $_ -match ': OK$' }).Count
+        foreach ($x in $nr) { $res.Add([string]$x) }
+    } catch { }
+    [pscustomobject]@{ TxtFile = $txt; Fleet = $fleet; Notified = $notified; Results = $res.ToArray(); Text = (Format-HelpReportText $R) }
+}
+function Read-FdHelpRequests([string]$Dir) {
+    $out = @{}
+    foreach ($fi in @(Get-ChildItem -LiteralPath (Join-Path $Dir 'Hilfe') -Filter '*.json' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+        try { $o = Get-Content -LiteralPath $fi.FullName -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json } catch { continue }
+        if (-not $o -or -not [string]$o.Computer -or [string]$o.Status -eq 'erledigt') { continue }
+        $o | Add-Member -NotePropertyName File -NotePropertyValue $fi.FullName -Force
+        $out[([string]$o.Computer).ToUpper()] = $o
+    }
+    $out
 }
 function Send-PflegeNotify([string]$Title, [string]$Text, [string]$Level = 'Info', [switch]$Force) {
     $cfg = Read-PflegeConfig; $n = $cfg.Notify
@@ -19373,7 +19450,8 @@ function Read-FdFleetData([string]$Dir, [int]$MaxJobs = 40) {
                     Data = $(if ($r -and $r.PSObject.Properties['Data']) { $r.Data } else { $null }) })
         }
     }
-    [pscustomobject]@{ Status = $status.ToArray(); Beats = $beats; Seen = $seen; Jobs = $jobs.ToArray(); Time = (Get-Date) }
+    $help = @{}; try { $help = Read-FdHelpRequests $Dir } catch { }
+    [pscustomobject]@{ Status = $status.ToArray(); Beats = $beats; Seen = $seen; Jobs = $jobs.ToArray(); Help = $help; Time = (Get-Date) }
 }
 
 # ---- Aufbereitung für Tabellen und Kacheln (rein, testbar)
@@ -21849,6 +21927,7 @@ $pageSecurity = New-Page 'Sicherheit' 'Alle Schutzfunktionen dieses PCs auf eine
 
 # ---------------------------------------------------------------- Handbuch (wird mit jeder Version gepflegt)
 $ManualNews = @(
+    'Version 14.2: Neu "Hilfe holen" - beim Zustands-Score und im Einfach-Modus. Ein Klick schickt dem Helfer einen Bericht (Zustand, Probleme, Fehler der letzten 3 Tage, Protokoll): in "Meine PCs" erscheint ein roter Hilferuf mit Bericht, aufs Handy kommt eine Nachricht (wenn eingerichtet), auf Wunsch wird eine E-Mail vorbereitet - sonst liegt der Bericht auf dem Desktop. Neu: Einfach-Modus für Eltern, Großeltern und Einsteiger - nur eine große Ampel und zwei Knöpfe "Alles reparieren" und "Hilfe holen" (Einstellungen > Stabilität oder beim ersten Start).',
     'Version 14.1: Treiber für Geräte mit Problem (z.B. Code 48/28) sucht PC-Tools jetzt gezielt - erst über Windows Update, dann über das offizielle Treiberpaket von HP, Lenovo oder Dell (Seite Geräte und "Punkte beheben"). Neu auf der Seite Autostart: Startzeit-Analyse zeigt, welche Programme, Dienste und Treiber den Start wie viele Sekunden bremsen, und entschärft sie mit einem Klick. Beim Zustands-Score: "Automatisch beheben, wenn der Score unter ... fällt" - nach jedem geplanten Lauf wird erledigt, was sicher automatisch geht, der Rest kommt als Hinweis.',
     'Version 14.0.1: Neuer Knopf "Punkte beheben" beim Zustands-Score - behebt mit einem Klick alles, was automatisch geht (Updates und Treiber nachinstallieren, Aufräumen, Autostart aufräumen, Geräte-Probleme, Virendefinitionen, Firewall) und sagt ehrlich, was nur von Hand geht (z.B. Secure Boot im BIOS). Fehlgeschlagene Updates zählen im Score nur noch, wenn sie seitdem nicht doch erfolgreich installiert wurden.',
     'Version 14.0: PC-Tools spricht jetzt 12 Sprachen - Deutsch, English, Español, Français, Italiano, Português (Brasil), Polski, Türkçe, Русский, 简体中文, 日本語 und 한국어. Die Sprache wählst du beim ersten Start oder jederzeit unter Einstellungen > Stabilität > Sprache; auch der KI-Assistent antwortet in deiner Sprache. Die Übersetzungen sind maschinell (KI) erstellt - Fehler bitte über "Übersetzungsfehler melden" mitteilen. Dazu: PC-Tools.exe, Installationsprogramm und die Linux-Ausgabe.',
@@ -22857,6 +22936,7 @@ $pageSettings = New-Page 'Einstellungen' 'Verhalten, Aufbewahrung, Zeitlimits, P
         (New-White (New-DataGrid 'SelfTestGrid' @('Bereich|Area|210', 'Ergebnis|State|200', 'Details|Detail|*') 'Height="290"')),
         ('<Border Background="#F4F6FA" CornerRadius="10" Padding="14,12" Margin="0,12,0,0"><StackPanel><TextBlock Text="Sprache" FontWeight="SemiBold" Foreground="#1F2A44"/><TextBlock x:Name="StabLangInfo" Text="" Foreground="#6B7890" FontSize="12" TextWrapping="Wrap" Margin="0,2,0,8"/><WrapPanel><ComboBox x:Name="LangBox" Uid="notr" Width="230" Margin="0,0,8,6">{0}</ComboBox><Button x:Name="BtnLangApply" Content="Sprache übernehmen (Neustart)" Style="{{StaticResource Sec}}" Margin="0,0,8,6"/><Button x:Name="BtnLangReport" Content="Übersetzungsfehler melden" Style="{{StaticResource Sec}}" Margin="0,0,8,6"/></WrapPanel></StackPanel></Border>' -f ((@($LangList.Keys | ForEach-Object { '<ComboBoxItem Uid="notr" Content="{0}" Tag="{1}"/>' -f $LangList[$_], $_ })) -join '')),
         '<Border Background="#F4F6FA" CornerRadius="10" Padding="14,12" Margin="0,12,0,0"><StackPanel><TextBlock Text="Lite-Ansicht" FontWeight="SemiBold" Foreground="#1F2A44"/><TextBlock x:Name="StabLite" Text="" Foreground="#6B7890" FontSize="12" TextWrapping="Wrap" Margin="0,2,0,8"/><WrapPanel><Button x:Name="BtnLiteToggle" Content="Lite-Ansicht einschalten" Style="{StaticResource Sec}"/><Button x:Name="BtnEdAsk" Content="Beim nächsten Start Lite/Voll fragen" Style="{StaticResource Sec}"/></WrapPanel></StackPanel></Border>' +
+        '<Border Background="#F4F6FA" CornerRadius="10" Padding="14,12" Margin="0,12,0,0"><StackPanel><TextBlock Text="Einfach-Modus und Hilfe holen" FontWeight="SemiBold" Foreground="#1F2A44"/><TextBlock Text="Der Einfach-Modus zeigt nur eine Ampel und zwei große Knöpfe: Alles reparieren und Hilfe holen - ideal für Eltern, Großeltern und Einsteiger. Hilfe holen schickt einen Bericht an den Helfer: in Meine PCs (wenn eingerichtet), als Handy-Nachricht (wenn eingerichtet) und auf Wunsch per E-Mail." Foreground="#6B7890" FontSize="12" TextWrapping="Wrap" Margin="0,2,0,8"/><WrapPanel><Button x:Name="BtnSimpleOn" Content="Einfach-Modus einschalten" Style="{StaticResource Sec}"/><TextBlock Text="E-Mail des Helfers:" VerticalAlignment="Center" Margin="6,0,8,8" Foreground="#1F2A44"/><TextBox x:Name="Help_Mail" Width="240" Padding="4,4" Margin="0,0,8,8" VerticalAlignment="Center"/><Button x:Name="BtnHelpTry" Content="Hilfe holen ausprobieren" Style="{StaticResource Sec}"/></WrapPanel></StackPanel></Border>' +
         '<Border Background="#F4F6FA" CornerRadius="10" Padding="14,12" Margin="0,12,0,0"><StackPanel><TextBlock Text="Server-Modus (AD / Windows Server)" FontWeight="SemiBold" Foreground="#1F2A44"/><TextBlock x:Name="SrvModeState" Text="" Foreground="#6B7890" FontSize="12" TextWrapping="Wrap" Margin="0,2,0,8"/><CheckBox x:Name="Settings_ServerMode" Content="Server-Werkzeuge anzeigen (AD, Azure/Entra, Server-Wartung)"/><TextBlock Text="Auf Windows Server sind die Server-Werkzeuge automatisch an. Auf einem normalen PC (z.B. Admin-Arbeitsplatz mit RSAT) lassen sie sich hier einschalten. Beim Einschalten bietet PC-Tools an, PowerShell-Remoting zu aktivieren (für Fern-Verwaltung)." Foreground="#6B7890" FontSize="12" TextWrapping="Wrap" Margin="0,8,0,0"/></StackPanel></Border>')) +
     (New-Card 'Virenschutz' @(
         '<TextBlock x:Name="AvStatus" Text="..." FontWeight="SemiBold" Foreground="#1F2A44" TextWrapping="Wrap"/>',
@@ -23421,7 +23501,7 @@ $pageScoreCard = @'
     <Grid Margin="0,0,0,10">
       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
       <StackPanel Orientation="Horizontal" VerticalAlignment="Center"><Border Width="4" Height="16" CornerRadius="2" Margin="0,0,10,0" VerticalAlignment="Center" Background="{StaticResource AccentGrad}"/><TextBlock Text="Zustands-Score" FontSize="16" FontWeight="SemiBold" Foreground="#1F2A44" VerticalAlignment="Center"/><TextBlock x:Name="ScInfo" Text="" FontSize="12" Foreground="#6B7890" Margin="12,0,0,0" VerticalAlignment="Center"/></StackPanel>
-      <StackPanel Grid.Column="1" Orientation="Horizontal"><Button x:Name="BtnScFix" Content="Punkte beheben" Padding="12,5" Margin="0,0,8,0" VerticalAlignment="Center" ToolTip="Behebt mit einem Klick alles, was sich automatisch beheben lässt (vorher kommt eine Übersicht)"/><Button x:Name="BtnScHistory" Content="Verlauf" Style="{StaticResource Sec}" Padding="12,5" Margin="0,0,8,0" VerticalAlignment="Center"/><Button x:Name="BtnScRefresh" Content="Neu berechnen" Style="{StaticResource Sec}" Padding="12,5" Margin="0" VerticalAlignment="Center"/></StackPanel>
+      <StackPanel Grid.Column="1" Orientation="Horizontal"><Button x:Name="BtnScFix" Content="Punkte beheben" Padding="12,5" Margin="0,0,8,0" VerticalAlignment="Center" ToolTip="Behebt mit einem Klick alles, was sich automatisch beheben lässt (vorher kommt eine Übersicht)"/><Button x:Name="BtnScHelp" Content="Hilfe holen" Style="{StaticResource Sec}" Padding="12,5" Margin="0,0,8,0" VerticalAlignment="Center" ToolTip="Schickt deinem Helfer einen Bericht über diesen PC (Zustand, Probleme, Protokoll)"/><Button x:Name="BtnScHistory" Content="Verlauf" Style="{StaticResource Sec}" Padding="12,5" Margin="0,0,8,0" VerticalAlignment="Center"/><Button x:Name="BtnScRefresh" Content="Neu berechnen" Style="{StaticResource Sec}" Padding="12,5" Margin="0" VerticalAlignment="Center"/></StackPanel>
     </Grid>
     <WrapPanel Margin="0,0,0,10"><CheckBox x:Name="AutoFix_Enabled" Content="Automatisch beheben, wenn der Score unter" VerticalAlignment="Center" Margin="0,0,6,0" ToolTip="Nach jedem geplanten Pflegelauf: Virendefinitionen, Geräte-Probleme und Treiber für Problemgeräte werden selbst behoben. Alles andere meldet PC-Tools als Hinweis."/><TextBox x:Name="AutoFix_Below" Width="40" TextAlignment="Center" Padding="2,2" VerticalAlignment="Center"/><TextBlock Text="fällt (nach jedem geplanten Lauf)" VerticalAlignment="Center" Foreground="#6B7890" Margin="6,0,0,0"/></WrapPanel>
     <Grid>
@@ -24621,10 +24701,11 @@ function New-FdJobButton([string]$Name, [string]$Text, [string]$Tag, [string]$Gl
 $fdTiles = '<WrapPanel Margin="0,4,0,2">' + (New-StatTile 'FdTOnline' 'online (Lebenszeichen der letzten Minuten)' '#2D7FF9') + (New-StatTile 'FdTOffline' 'offline oder ohne Lebenszeichen' '#52627A') +
     (New-StatTile 'FdTRed' 'Ampel rot - dringend' '#DC2626') + (New-StatTile 'FdTYellow' 'Ampel gelb - bald erledigen' '#EA580C') + (New-StatTile 'FdTGreen' 'Ampel grün - alles gut' '#16A34A') + (New-StatTile 'FdTJobs' 'Aufträge wartend oder laufend' '#6D4AE8') + '</WrapPanel>'
 $fdGridX = New-DataGrid 'FdGrid' @('PC|Computer|120', 'Online|OnlineText|100|OnlineSort', 'Ampel|StateText|60|StateSort', 'Score|ScoreText|58|ScoreSort', 'Zuletzt gesehen|SeenText|112|SeenSort', 'Windows|Build|130', 'PC-Tools|VerText|80',
-    'Neustart|RebootText|68', 'Updates|WuText|70|WuSort', 'C: frei|FreeText|105|FreeSort', 'Läuft seit|UptimeText|80|UptimeSort', 'Fehler 24 h|ErrText|78|ErrSort', 'Sicherung|BackupText|150|BackupSort', 'Komplettsich.|FullText|95', 'Aufträge|JobText|*', 'Standort|AkStandort|110', 'Schutz|KeyText|80') 'Height="330" SelectionMode="Extended"'
+    'Neustart|RebootText|68', 'Updates|WuText|70|WuSort', 'C: frei|FreeText|105|FreeSort', 'Läuft seit|UptimeText|80|UptimeSort', 'Fehler 24 h|ErrText|78|ErrSort', 'Sicherung|BackupText|150|BackupSort', 'Komplettsich.|FullText|95', 'Aufträge|JobText|*', 'Hilfe|HelpText|110', 'Standort|AkStandort|110', 'Schutz|KeyText|80') 'Height="330" SelectionMode="Extended"'
 $fdLive = (New-Card 'Fernwartung: alle PCs live' @(
         '<Grid Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Orientation="Horizontal" VerticalAlignment="Center"><Ellipse x:Name="FdLiveDot" Width="11" Height="11" Fill="#9AA5B8" Margin="0,0,9,0" VerticalAlignment="Center"/><TextBlock x:Name="FdInfo" Text="Wird beim Öffnen der Seite geladen ..." FontWeight="SemiBold" Foreground="#1F2A44" TextWrapping="Wrap" VerticalAlignment="Center"/></StackPanel><StackPanel Grid.Column="1" Orientation="Horizontal"><CheckBox x:Name="FdAuto" Content="alle 30 Sekunden aktualisieren" IsChecked="True" VerticalAlignment="Center" Margin="0,0,12,0"/><Button x:Name="FdBtnRefresh" Content="Jetzt aktualisieren" Style="{StaticResource Sec}" Padding="12,5"/></StackPanel></Grid>',
         $fdTiles,
+        '<Border x:Name="FdHelpBox" Visibility="Collapsed" Background="#FEF2F2" BorderBrush="#FCA5A5" BorderThickness="1" CornerRadius="10" Padding="12,10" Margin="0,0,0,10"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="&#xE897;" FontFamily="Segoe MDL2 Assets" Foreground="#DC2626" FontSize="18" Margin="0,0,10,0" VerticalAlignment="Center"/><TextBlock x:Name="FdHelpText" Foreground="#991B1B" FontWeight="SemiBold" TextWrapping="Wrap" MaxWidth="760" VerticalAlignment="Center"/></StackPanel><StackPanel Grid.Column="1" Orientation="Horizontal"><Button x:Name="FdBtnHelpShow" Content="Hilferuf ansehen" Padding="12,5" Margin="0,0,8,0"/><Button x:Name="FdBtnHelpDone" Content="Als erledigt markieren" Style="{StaticResource Sec}" Padding="12,5" Margin="0"/></StackPanel></Grid></Border>',
         '<Border x:Name="FdWarnBox" Visibility="Collapsed" Background="#FFF7ED" BorderBrush="#FDBA74" BorderThickness="1" CornerRadius="10" Padding="12,8" Margin="0,0,0,10"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets" Foreground="#EA580C" FontSize="15" Margin="0,1,10,0" VerticalAlignment="Top"/><TextBlock x:Name="FdWarn" Foreground="#9A3412" TextWrapping="Wrap" MaxWidth="1050"/></StackPanel></Border>',
         ('<WrapPanel>{0}{1}{2}</WrapPanel>' -f (New-Filter 'FdFilter' 240), (New-Combo 'FdShow' @('Alle PCs', 'Nur PCs mit Problemen', 'Nur online', 'Nur offline') 210), (New-Bar @('FdBtnSelAll|Alle wählen', 'FdBtnSelProblem|Alle mit Problemen wählen', 'FdBtnSelNone|Auswahl aufheben'))),
         (New-White $fdGridX 'Margin="0,0,0,8"'),
@@ -25179,6 +25260,30 @@ $xaml = @"
         </StackPanel>
       </Grid>
     </Border>
+    <Grid x:Name="SimpleOverlay" Grid.RowSpan="2" Visibility="Collapsed" Background="#F4F6FA" Panel.ZIndex="40">
+      <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel MaxWidth="820" Margin="32,28,32,28">
+          <Grid>
+            <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE90F;" FontFamily="Segoe MDL2 Assets" FontSize="30" Foreground="#2D7FF9" VerticalAlignment="Center" Margin="0,0,14,0"/><TextBlock Text="PC-Tools" FontSize="32" FontWeight="SemiBold" Foreground="#1F2A44" VerticalAlignment="Center"/></StackPanel>
+            <Button x:Name="BtnSimpleExit" Content="Normale Ansicht" Style="{StaticResource Sec}" HorizontalAlignment="Right" VerticalAlignment="Center" FontSize="16" Padding="16,8" Margin="0"/>
+          </Grid>
+          <Border Background="White" CornerRadius="24" Padding="32,28" Margin="0,24,0,0" BorderBrush="#E2E7F0" BorderThickness="1">
+            <Grid>
+              <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+              <Ellipse x:Name="SimpleLight" Width="130" Height="130" Fill="#9AA5B8" VerticalAlignment="Center"/>
+              <StackPanel Grid.Column="1" Margin="32,0,0,0" VerticalAlignment="Center">
+                <TextBlock x:Name="SimpleHead" Text="Der Zustand wird geprüft ..." FontSize="32" FontWeight="SemiBold" Foreground="#1F2A44" TextWrapping="Wrap"/>
+                <TextBlock x:Name="SimpleSub" Text="Einen Moment bitte." FontSize="20" Foreground="#475569" TextWrapping="Wrap" Margin="0,10,0,0"/>
+                <ProgressBar x:Name="SimpleProgress" Height="14" Minimum="0" Maximum="100" Margin="0,16,0,0" Foreground="#2D7FF9" Background="#E3E8F2" BorderThickness="0" Visibility="Collapsed"/>
+              </StackPanel>
+            </Grid>
+          </Border>
+          <Button x:Name="BtnSimpleFix" Content="Alles reparieren" FontSize="28" Padding="30,26" Margin="0,24,0,0" Background="#16A34A" HorizontalAlignment="Stretch"/>
+          <Button x:Name="BtnSimpleHelp" Content="Hilfe holen" FontSize="28" Padding="30,26" Margin="0,16,0,0" Background="#2D7FF9" HorizontalAlignment="Stretch"/>
+          <TextBlock x:Name="SimpleState" Text="" FontSize="17" Foreground="#475569" TextWrapping="Wrap" Margin="0,18,0,0"/>
+        </StackPanel>
+      </ScrollViewer>
+    </Grid>
     <Grid x:Name="SearchOverlay" Grid.RowSpan="2" Visibility="Collapsed" Background="#8C0B1220">
       <Border Width="640" VerticalAlignment="Top" Margin="0,80,0,0" Background="White" CornerRadius="14" Padding="18,14" BorderBrush="#D3DBEA" BorderThickness="1">
         <Border.Effect><DropShadowEffect BlurRadius="34" ShadowDepth="6" Opacity="0.35"/></Border.Effect>
@@ -36508,7 +36613,7 @@ $ui.BtnFhMail.Add_Click({
     $s = Get-FhSettings
     $subj = 'Hilfe-Anfrage von {0}: {1}' -f $env:COMPUTERNAME, $script:FhReq.Category
     $body = ([string]$script:FhLast.Message) + "`n`nDas Hilfe-Paket hänge ich an: " + [IO.Path]::GetFileName($script:FhLast.Zip)
-    if ($body.Length -gt 1500) { $body = $body.Substring(0, 1500) }
+    if ($body.Length -gt 900) { $body = $body.Substring(0, 900) }
     try { Start-Process ('mailto:{0}?subject={1}&body={2}' -f [Uri]::EscapeDataString([string]$s.HelperMail), [Uri]::EscapeDataString($subj), [Uri]::EscapeDataString($body)) } catch { Show-UiError ('Kein E-Mail-Programm gefunden: ' + $_.Exception.Message) }
     if (Test-Path -LiteralPath $script:FhLast.Zip) { Start-Process explorer.exe ('/select,"{0}"' -f $script:FhLast.Zip) }
     $ui.StatusText.Text = 'E-Mail geöffnet - die ZIP-Datei aus dem Explorer-Fenster in die E-Mail ziehen.'
@@ -38058,6 +38163,7 @@ function Show-EditionChooser([bool]$PreLite) {
         <StackPanel VerticalAlignment="Center">
           <CheckBox x:Name="Remember" Content="Auswahl merken (nicht mehr fragen)" IsChecked="True" Foreground="#1F2A44"/>
           <CheckBox x:Name="TbAutoFirst" Content="Werkzeuge (Toolbox) automatisch laden und immer aktuell halten" IsChecked="True" Foreground="#1F2A44" Margin="0,8,0,0"/>
+          <CheckBox x:Name="EdSimple" Content="Einfach-Modus: nur Ampel und zwei große Knöpfe (für Einsteiger)" IsChecked="False" Foreground="#1F2A44" Margin="0,8,0,0"/>
         </StackPanel>
         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
           <Button x:Name="BtnGo" Content="Starten" Padding="26,9" Foreground="White" Background="#2D7FF9" BorderThickness="0" FontWeight="SemiBold" Cursor="Hand"/>
@@ -38097,7 +38203,7 @@ function Show-EditionChooser([bool]$PreLite) {
     $w.Add_MouseLeftButtonDown({ param($s, $e) try { if ($e.OriginalSource -isnot [Windows.Controls.Primitives.ButtonBase]) { $s.DragMove() } } catch { } })
     $w.Add_KeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $script:EdOk = $true; $s.Close() } elseif ($e.Key -eq 'Escape') { $s.Close() } })
     [void]$w.ShowDialog()
-    return [pscustomobject]@{ Relaunch = [bool]$script:EdRelaunch; Ok = $script:EdOk; Lite = [bool]$script:EdLite; Remember = [bool]$w.FindName('Remember').IsChecked; TbAuto = [bool]$w.FindName('TbAutoFirst').IsChecked }
+    return [pscustomobject]@{ Relaunch = [bool]$script:EdRelaunch; Ok = $script:EdOk; Lite = [bool]$script:EdLite; Remember = [bool]$w.FindName('Remember').IsChecked; TbAuto = [bool]$w.FindName('TbAutoFirst').IsChecked; Simple = [bool]$w.FindName('EdSimple').IsChecked }
 }
 function Set-EditionFiles([bool]$Lite) {
     $files = @(Join-Path $DataDir 'lite.txt'); if ($PSScriptRoot -and ($PSScriptRoot.TrimEnd('\') -ne $DataDir.TrimEnd('\'))) { $files += (Join-Path $PSScriptRoot 'lite.txt') }
@@ -38113,6 +38219,7 @@ if ($edMode -notin 'Lite', 'Voll') {
         while ($ch.Relaunch -and $nRel -lt 12) { $nRel++; $ch = Show-EditionChooser ([bool]$ch.Lite) }
         if ($ch.Ok) {
             Set-EditionFiles $ch.Lite
+            if ($ch.Simple) { try { Set-Content -LiteralPath (Join-Path $DataDir 'einfach.txt') -Value 'Einfach-Modus' -Encoding ASCII } catch { } }
             Set-Content -LiteralPath $EditionFile -Value $(if (-not $ch.Remember) { 'Fragen' } elseif ($ch.Lite) { 'Lite' } else { 'Voll' }) -Encoding ASCII
             # Erststart-Frage: Toolbox automatisch aktuell halten (steuert die autosync.off-Markierung)
             try {
@@ -38152,6 +38259,115 @@ $ui.BtnLangApply.Add_Click({
 $ui.BtnLangReport.Add_Click({ Open-LangReport })
 try { Update-LangFileBg } catch { }
 $ui.BtnEdAsk.Add_Click({ try { Set-Content -LiteralPath (Join-Path $DataDir 'edition.txt') -Value 'Fragen' -Encoding ASCII; $ui.StatusText.Text = 'Beim nächsten Start erscheint wieder die Auswahl Lite / Vollversion.' } catch { Show-UiError $_.Exception.Message } })
+# ---- Hilfe holen und Einfach-Modus (14.2)
+function Start-HelpRequest {
+    $big = ($ui.SimpleOverlay.Visibility -eq 'Visible')
+    $x = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="PC-Tools - Hilfe holen" Width="620" SizeToContent="Height" WindowStartupLocation="CenterOwner" ResizeMode="NoResize" FontFamily="Segoe UI" FontSize="$(if ($big) { 18 } else { 14 })" Background="#F4F6FA">
+  <StackPanel Margin="24">
+    <TextBlock Text="Hilfe holen" FontSize="$(if ($big) { 28 } else { 22 })" FontWeight="SemiBold" Foreground="#1F2A44"/>
+    <TextBlock Text="Was ist los? Ein Satz reicht - zum Beispiel: Drucker geht nicht, PC ist langsam, komische Meldung. Du kannst das Feld auch leer lassen." TextWrapping="Wrap" Foreground="#475569" Margin="0,8,0,10"/>
+    <TextBox x:Name="HMsg" Height="$(if ($big) { 130 } else { 100 })" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Padding="8"/>
+    <TextBlock Text="Mitgeschickt werden: Zustand des PCs, gefundene Probleme, Fehler aus den letzten 3 Tagen und die letzten Zeilen des Protokolls. Keine Passwörter, keine Dateien." TextWrapping="Wrap" Foreground="#6B7890" FontSize="$(if ($big) { 15 } else { 12 })" Margin="0,10,0,0"/>
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
+      <Button x:Name="HOk" Content="Hilfe anfordern" Padding="20,10" Margin="0,0,10,0" IsDefault="True"/>
+      <Button x:Name="HNo" Content="Abbrechen" Padding="20,10" IsCancel="True"/>
+    </StackPanel>
+  </StackPanel>
+</Window>
+"@
+    $dlg = [Windows.Markup.XamlReader]::Parse((Convert-ThemeXaml $x)); try { $dlg.Owner = $window } catch { }
+    $dlg.FindName('HOk').Add_Click({ $dlg.DialogResult = $true }.GetNewClosure())
+    $dlg.Add_ContentRendered({ try { $dlg.FindName('HMsg').Focus() } catch { } }.GetNewClosure())
+    if (-not $dlg.ShowDialog()) { return }
+    $msg = ([string]$dlg.FindName('HMsg').Text).Trim()
+    $ui.StatusText.Text = 'Hilfe wird angefordert ...'
+    if ($ui.SimpleState) { $ui.SimpleState.Text = 'Hilfe wird angefordert ...' }
+    $ui.BtnSimpleHelp.IsEnabled = $false; $ui.BtnScHelp.IsEnabled = $false
+    Invoke-Bg -Script { param($m, $sc) $r = New-HelpReport $m $sc; Send-HelpRequest $r } -Arguments @($msg, $script:ScLast) -Functions @('New-HelpReport', 'Format-HelpReportText', 'Send-HelpRequest', 'Get-HealthItems', 'Get-HealthArgs', 'Get-HealthState', 'Read-PflegeConfig', 'Send-PflegeNotify', 'Write-FleetStatus', 'Connect-BackupTarget') -Done {
+        param($r, $err)
+        $ui.BtnSimpleHelp.IsEnabled = $true; $ui.BtnScHelp.IsEnabled = $true
+        $x = @($r | Where-Object { $_ -and $_.PSObject.Properties['TxtFile'] })[0]
+        if ($err -or -not $x) { $ui.StatusText.Text = 'Hilfe holen fehlgeschlagen.'; Show-UiError ('Hilfe holen hat nicht geklappt: ' + $(if ($err) { $err.Message } else { 'kein Ergebnis' })); return }
+        $ways = [System.Collections.Generic.List[string]]::new()
+        if ($x.Fleet) { $ways.Add('Dein Helfer sieht den Hilferuf in PC-Tools unter "Meine PCs".') }
+        if ($x.Notified) { $ways.Add('Dein Helfer hat eine Nachricht aufs Handy bekommen.') }
+        $mail = ''; try { $mail = [string](Read-PflegeConfig).Help.Mail } catch { }
+        if ($mail -match '^[^@\s]+@[^@\s]+\.[^@\s]+$') {
+            try {
+                $body = [string]$x.Text; if ($body.Length -gt 900) { $body = $body.Substring(0, 900) + "`r`n... (vollständiger Bericht im Anhang: " + [IO.Path]::GetFileName($x.TxtFile) + ')' }
+                Start-Process ('mailto:{0}?subject={1}&body={2}' -f $mail, [Uri]::EscapeDataString(('PC-Tools: Hilfe für {0}' -f $env:COMPUTERNAME)), [Uri]::EscapeDataString($body))
+                Start-Process 'explorer.exe' ('/select,"{0}"' -f $x.TxtFile)
+                $ways.Add(('Eine E-Mail an {0} ist vorbereitet - bitte nur noch auf Senden klicken (die Datei mit dem Bericht ist im geöffneten Ordner markiert und kann angehängt werden).' -f $mail))
+            } catch { }
+        }
+        if (-not $ways.Count) {
+            $desk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'PC-Tools Hilfe.txt'
+            try { Copy-Item -LiteralPath $x.TxtFile -Destination $desk -Force } catch { $desk = $x.TxtFile }
+            try { [Windows.Clipboard]::SetText([string]$x.Text) } catch { }
+            [Windows.MessageBox]::Show((T ("Der Bericht liegt jetzt auf dem Desktop: ""PC-Tools Hilfe.txt"" und ist auch in die Zwischenablage kopiert.`n`nSchick ihn deinem Helfer, zum Beispiel per E-Mail oder WhatsApp (einfach einfügen).`n`nTipp für den Helfer: Unter Einstellungen > Stabilität > ""E-Mail des Helfers"" eintragen oder ""Meine PCs"" einrichten - dann geht es beim nächsten Mal automatisch.")), (T 'PC-Tools'), 'OK', 'Information') | Out-Null
+            $ui.StatusText.Text = 'Hilfe-Bericht auf dem Desktop gespeichert.'
+        } else {
+            [Windows.MessageBox]::Show((T ("Deine Hilfe-Anfrage ist unterwegs.`n`n- " + ($ways -join "`n- "))), (T 'PC-Tools'), 'OK', 'Information') | Out-Null
+            $ui.StatusText.Text = 'Hilfe angefordert.'
+        }
+        if ($ui.SimpleState) { $ui.SimpleState.Text = $ui.StatusText.Text }
+    }
+}
+$ui.BtnScHelp.Add_Click({ try { Start-HelpRequest } catch { Show-UiError ('Hilfe holen: ' + $_.Exception.Message) } })
+$ui.BtnHelpTry.Add_Click({ try { try { Save-PflegeConfig (Get-ConfigFromUi) } catch { }; Start-HelpRequest } catch { Show-UiError ('Hilfe holen: ' + $_.Exception.Message) } })
+$ui.Help_Mail.Add_LostFocus({ try { $c = Read-PflegeConfig; $c.Help | Add-Member -NotePropertyName Mail -NotePropertyValue ([string]$ui.Help_Mail.Text).Trim() -Force; Save-PflegeConfig $c } catch { } })
+$script:SimpleFile = Join-Path $DataDir 'einfach.txt'
+$script:SimpleWasBusy = $false; $script:SimpleScAsk = [datetime]::MinValue
+$simpleTimer = New-Object Windows.Threading.DispatcherTimer
+$simpleTimer.Interval = [TimeSpan]::FromSeconds(2)
+function Update-SimpleView {
+    if ($ui.SimpleOverlay.Visibility -ne 'Visible') { return }
+    $busy = [bool]$script:Job
+    if ($script:SimpleWasBusy -and -not $busy) { $script:SimpleScAsk = Get-Date; try { Update-ScScoreUi } catch { } }
+    $script:SimpleWasBusy = $busy
+    $ui.BtnSimpleFix.IsEnabled = -not $busy
+    if ($busy) {
+        $ui.SimpleLight.Fill = New-UiBrush '#2D7FF9'; $ui.SimpleHead.Text = 'PC-Tools arbeitet gerade ...'
+        $ui.SimpleSub.Text = $(if ([string]$ui.ActStep.Text) { [string]$ui.ActStep.Text } else { 'Bitte den PC eingeschaltet lassen.' })
+        $ui.SimpleProgress.Visibility = 'Visible'; try { $ui.SimpleProgress.Value = [double]$ui.Progress.Value } catch { }
+        $ui.SimpleState.Text = 'Du kannst nebenbei weiterarbeiten. Wenn alles fertig ist, springt die Ampel wieder um.'
+        return
+    }
+    $ui.SimpleProgress.Visibility = 'Collapsed'
+    $r = $script:ScLast
+    if (-not $r) {
+        $ui.SimpleLight.Fill = New-UiBrush '#9AA5B8'; $ui.SimpleHead.Text = 'Der Zustand wird geprüft ...'; $ui.SimpleSub.Text = 'Einen Moment bitte.'
+        if (-not $script:ScBusy -and ((Get-Date) - $script:SimpleScAsk).TotalSeconds -gt 90) { $script:SimpleScAsk = Get-Date; try { Update-ScScoreUi } catch { } }
+        return
+    }
+    $s = 0; try { $s = [int]$r.Score } catch { }
+    $bad = @(@($r.Components) | Where-Object { $_ -and [double]$_.Max -gt 0 -and [double]$_.Points -lt [double]$_.Max } | Sort-Object { [double]$_.Points - [double]$_.Max } | Select-Object -First 3 | ForEach-Object { [string]$_.Name })
+    if ($s -ge 80) { $ui.SimpleLight.Fill = New-UiBrush '#22C55E'; $ui.SimpleHead.Text = 'Alles in Ordnung' }
+    elseif ($s -ge 60) { $ui.SimpleLight.Fill = New-UiBrush '#F59E0B'; $ui.SimpleHead.Text = 'Ein paar Kleinigkeiten' }
+    else { $ui.SimpleLight.Fill = New-UiBrush '#DC2626'; $ui.SimpleHead.Text = 'Bitte reparieren' }
+    $ui.SimpleSub.Text = ('Zustand: {0} von 100 Punkten.' -f $s) + $(if ($bad.Count -and $s -lt 100) { "`n" + (T 'Verbesserungsbedarf:') + ' ' + ($bad -join ', ') } else { '' })
+    if (-not [string]$ui.SimpleState.Text -or $ui.SimpleState.Text -like 'Du kannst nebenbei*') { $ui.SimpleState.Text = $(if ($s -lt 80) { 'Tipp: "Alles reparieren" erledigt alles, was automatisch geht. Wenn danach noch etwas nicht stimmt: "Hilfe holen".' } else { 'Wenn trotzdem etwas nicht funktioniert: "Hilfe holen".' }) }
+}
+function Set-SimpleMode([bool]$On) {
+    try { if ($On) { Set-Content -LiteralPath $script:SimpleFile -Value 'Einfach-Modus' -Encoding ASCII } else { Remove-Item -LiteralPath $script:SimpleFile -Force -ErrorAction SilentlyContinue } } catch { }
+    $ui.SimpleOverlay.Visibility = $(if ($On) { 'Visible' } else { 'Collapsed' })
+    if ($On) { $simpleTimer.Start(); Update-SimpleView } else { $simpleTimer.Stop(); $ui.StatusText.Text = 'Normale Ansicht. Den Einfach-Modus gibt es unter Einstellungen > Stabilität.' }
+}
+$simpleTimer.Add_Tick({ try { Update-SimpleView } catch { } })
+$ui.BtnSimpleFix.Add_Click({
+    try {
+        if (-not $script:ScLast) { Show-UiError 'Der Zustand wird noch geprüft - bitte gleich noch einmal klicken.'; return }
+        $ui.SimpleState.Text = ''
+        Start-ScFixAll
+        Update-SimpleView
+    } catch { Show-UiError ('Alles reparieren: ' + $_.Exception.Message) }
+})
+$ui.BtnSimpleHelp.Add_Click({ try { Start-HelpRequest } catch { Show-UiError ('Hilfe holen: ' + $_.Exception.Message) } })
+$ui.BtnSimpleExit.Add_Click({ Set-SimpleMode $false })
+$ui.BtnSimpleOn.Add_Click({ Set-SimpleMode $true })
+if (Test-Path -LiteralPath $script:SimpleFile) { try { Set-SimpleMode $true } catch { } }
 function Update-StabInfo {
     $pv = Get-PflegeVorversion
     $sk = @(Get-UpdateSkip)
@@ -40847,7 +41063,9 @@ function Update-FdDashboard {
 function Show-FdData($Data) {
     $script:FdData = $Data
     $now = Get-Date
-    $script:FdRows = @(Get-FdRows $Data $now (Get-FdOnlineMin) $script:FdLocalFp | Sort-Object StateSort, OnlineSort, Computer)
+    $script:FdRows = @(Get-FdRows $Data $now (Get-FdOnlineMin) $script:FdLocalFp)
+    Add-FdHelpFields $script:FdRows $Data
+    $script:FdRows = @($script:FdRows | Sort-Object @{ e = { if ($_.Help) { 0 } else { 1 } } }, StateSort, OnlineSort, Computer)
     $script:FdJobRows = @(@($Data.Jobs) | Where-Object { $_ } | ForEach-Object { ConvertTo-FdJobRow $_ $now })
     $script:FleetPcs = @(@($Data.Status) | Where-Object { $_ })
     $c = Get-FdTileCounts $script:FdRows
@@ -40857,8 +41075,71 @@ function Show-FdData($Data) {
     Set-FdGridRows
     Update-FdJobGrid
     Update-FdWarnings
+    try { Update-FdHelpBox } catch { }
     if ($script:FdSelPc) { $row = @($script:FdRows | Where-Object { $_.Computer -eq $script:FdSelPc })[0]; if ($row) { Show-FdDetail $row } }
     if (-not $script:FdRemInit) { $script:FdRemInit = $true; try { Update-RemPage } catch { } }
+}
+function Add-FdHelpFields($Rows, $Data) {
+    $h = @{}; if ($Data -and $Data.PSObject.Properties['Help'] -and $Data.Help) { $h = $Data.Help }
+    foreach ($r in @($Rows)) {
+        if (-not $r) { continue }
+        $k = ([string]$r.Computer).ToUpper(); $x = $null; if ($h.ContainsKey($k)) { $x = $h[$k] }
+        $txt = ''; if ($x) { $txt = try { 'Hilfe! ' + ([datetime]$x.Time).ToString('dd.MM. HH:mm') } catch { 'Hilfe!' } }
+        $r | Add-Member -NotePropertyName Help -NotePropertyValue $x -Force
+        $r | Add-Member -NotePropertyName HelpText -NotePropertyValue $txt -Force
+        if ($x) { $r.Problem = $true; $r.Level = 'Error' }
+    }
+}
+function Update-FdHelpBox {
+    $open = @($script:FdRows | Where-Object { $_.Help })
+    if (-not $open.Count) { $ui.FdHelpBox.Visibility = 'Collapsed'; return }
+    $ui.FdHelpBox.Visibility = 'Visible'
+    $ui.FdHelpText.Text = ('Hilferuf von {0} - Bericht ansehen, dann z.B. "Pflege" oder "Zustand melden" an diesen PC senden.' -f (($open | ForEach-Object { $m = [string]$_.Help.Message; if ($m.Length -gt 60) { $m = $m.Substring(0, 60) + ' ...' }; if ($m) { '{0} ("{1}")' -f $_.Computer, $m } else { $_.Computer } }) -join ', '))
+}
+function Get-FdHelpRow {
+    $sel = @($ui.FdGrid.SelectedItems | Where-Object { $_.Help })
+    if ($sel.Count) { return $sel[0] }
+    return @($script:FdRows | Where-Object { $_.Help })[0]
+}
+function Show-FdHelp {
+    $row = Get-FdHelpRow; if (-not $row) { Show-UiError 'Es gibt keinen offenen Hilferuf.'; return }
+    $txt = Format-HelpReportText $row.Help
+    $x = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="PC-Tools - Hilferuf" Width="900" Height="680" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI" FontSize="13" Background="#F4F6FA">
+  <Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <Border Background="White" CornerRadius="10" BorderBrush="#E2E7F0" BorderThickness="1"><TextBox x:Name="HT" Uid="notr" IsReadOnly="True" BorderThickness="0" FontFamily="Consolas" FontSize="12" Padding="10" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/></Border>
+    <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+      <Button x:Name="HSel" Content="PC in der Liste wählen" Padding="14,7" Margin="0,0,8,0"/><Button x:Name="HCopy" Content="Kopieren" Padding="14,7" Margin="0,0,8,0"/><Button x:Name="HClose" Content="Schließen" Padding="14,7" IsCancel="True"/>
+    </StackPanel>
+  </Grid>
+</Window>
+"@
+    $dlg = [Windows.Markup.XamlReader]::Parse((Convert-ThemeXaml $x)); try { $dlg.Owner = $window } catch { }
+    $dlg.FindName('HT').Text = $txt
+    $pc = [string]$row.Computer
+    $dlg.FindName('HCopy').Add_Click({ try { [Windows.Clipboard]::SetText($txt) } catch { } }.GetNewClosure())
+    $dlg.FindName('HClose').Add_Click({ $dlg.Close() }.GetNewClosure())
+    $script:FdHelpDlg = $dlg; $script:FdHelpPc = $pc
+    $dlg.FindName('HSel').Add_Click({
+        $script:FdSuppress = $true
+        try { $ui.FdGrid.UnselectAll(); foreach ($it in @($ui.FdGrid.Items)) { if ([string]$it.Computer -eq $script:FdHelpPc) { [void]$ui.FdGrid.SelectedItems.Add($it); $ui.FdGrid.ScrollIntoView($it) } } } finally { $script:FdSuppress = $false }
+        Update-FdSelInfo; $script:FdHelpDlg.Close()
+    })
+    [void]$dlg.ShowDialog()
+}
+function Close-FdHelp {
+    $row = Get-FdHelpRow; if (-not $row) { Show-UiError 'Es gibt keinen offenen Hilferuf.'; return }
+    if (-not (Confirm-Ui ('Hilferuf von {0} als erledigt markieren?' -f $row.Computer))) { return }
+    try {
+        $f = [string]$row.Help.File; $o = Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json
+        $o | Add-Member -NotePropertyName Status -NotePropertyValue 'erledigt' -Force
+        $o | Add-Member -NotePropertyName Done -NotePropertyValue ((Get-Date).ToString('o')) -Force
+        $o | Add-Member -NotePropertyName DoneBy -NotePropertyValue $env:COMPUTERNAME -Force
+        $o | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $f -Encoding UTF8
+        $ui.StatusText.Text = ('Hilferuf von {0} ist erledigt.' -f $row.Computer)
+        Update-FdDashboard
+    } catch { Show-UiError ('Konnte den Hilferuf nicht ändern: ' + $_.Exception.Message) }
 }
 function Set-FdGridRows {
     $g = $ui.FdGrid
@@ -41037,6 +41318,8 @@ $ui.FdGrid.Add_SelectionChanged({
 })
 $ui.FdBtnSelAll.Add_Click({ $ui.FdGrid.SelectAll() })
 $ui.FdBtnSelNone.Add_Click({ $ui.FdGrid.UnselectAll() })
+$ui.FdBtnHelpShow.Add_Click({ try { Show-FdHelp } catch { Show-UiError $_.Exception.Message } })
+$ui.FdBtnHelpDone.Add_Click({ try { Close-FdHelp } catch { Show-UiError $_.Exception.Message } })
 $ui.FdBtnSelProblem.Add_Click({ $script:FdSuppress = $true; try { $ui.FdGrid.UnselectAll(); foreach ($it in @($ui.FdGrid.Items)) { if ($it.Problem) { [void]$ui.FdGrid.SelectedItems.Add($it) } } } finally { $script:FdSuppress = $false }; Update-FdSelInfo; if ($ui.FdJobOnlySel.IsChecked) { Update-FdJobGrid } })
 $ui.FdBtnRdp.Add_Click({ $p = @(Get-FdSelectedPcs); if ($p.Count) { Start-Process mstsc.exe -ArgumentList ('/v:{0}' -f $p[0]) } else { Show-UiError 'Bitte zuerst einen PC wählen.' } })
 $ui.FdBtnDRdp.Add_Click({ if ($script:FdSelPc) { Start-Process mstsc.exe -ArgumentList ('/v:{0}' -f $script:FdSelPc) } })
