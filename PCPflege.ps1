@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Auto, [switch]$Run, [string]$Parts = '', [switch]$Analyze, [switch]$CheckOnly, [string]$RunId = '', [string]$AppsFile = '', [string]$WingetFile = '', [string]$DirectFile = '', [string]$Monitor = '', [switch]$DeskArrange, [string]$Topology = '', [int]$Delay = 0, [switch]$Silent, [switch]$Install, [string]$JobFile = '', [switch]$Backup, [switch]$FleetPoll, [string]$FirstLogon = '', [switch]$NetDiag, [switch]$TbSync, [switch]$WinRepair, [switch]$NetDeep, [string]$DeepOpts = '', [switch]$FullBackup, [switch]$FullRepair, [switch]$NetDoc, [switch]$Sign, [string]$SignOpts = '', [string]$ChocoFile = '')
 
-$AppVersion = '14.2'
+$AppVersion = '14.3'
 $DefaultUpdateSource = 'github:rhedv42-sudo/pc-tools@stable'
 # Portabel (USB-Stick): Datei portable.txt neben dem Skript -> Einstellungen/Protokolle im Ordner Daten auf dem Stick
 $Script:IsPortable = [bool]($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'portable.txt')))
@@ -5283,6 +5283,63 @@ function Get-AutoRepairKeys {
     return , $out.ToArray()
 }
 # Eigener, klar benannter Schlüssel-Ordner in PC-Tools (auch im Hintergrundlauf nutzbar)
+# ---- Passwort-Check (14.3): k-Anonymität - nur die ersten 5 Zeichen des SHA-1-Werts verlassen den PC
+function Get-Sha1Hex([string]$Text) {
+    $sha = [Security.Cryptography.SHA1]::Create()
+    try { (($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text)) | ForEach-Object { $_.ToString('X2') }) -join '') } finally { $sha.Dispose() }
+}
+function Get-PwnedCounts([string[]]$Hashes) {
+    try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
+    $res = @{}; $byPre = @{}
+    foreach ($h in @($Hashes | Where-Object { $_ } | ForEach-Object { $_.ToUpper() } | Select-Object -Unique)) { $pre = $h.Substring(0, 5); if (-not $byPre.ContainsKey($pre)) { $byPre[$pre] = [System.Collections.Generic.List[string]]::new() }; $byPre[$pre].Add($h) }
+    foreach ($pre in @($byPre.Keys)) {
+        $body = ''
+        for ($try = 0; $try -lt 3 -and -not $body; $try++) {
+            try { $body = [string](Invoke-WebRequest -Uri ('https://api.pwnedpasswords.com/range/' + $pre) -Headers @{ 'Add-Padding' = 'true'; 'User-Agent' = 'PC-Tools-Passwort-Check' } -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop).Content } catch { if ($try -eq 2) { throw ('Die Prüfung ist gerade nicht erreichbar (api.pwnedpasswords.com): ' + $_.Exception.Message) }; Start-Sleep -Milliseconds 800 }
+        }
+        $map = @{}; foreach ($ln in ($body -split "`r?`n")) { $i = $ln.IndexOf(':'); if ($i -eq 35) { $map[$ln.Substring(0, 35).ToUpper()] = [int64]$ln.Substring(36).Trim() } }
+        foreach ($h in $byPre[$pre]) { $suf = $h.Substring(5); $res[$h] = $(if ($map.ContainsKey($suf)) { $map[$suf] } else { [int64]0 }) }
+    }
+    $res
+}
+function Read-PasswordCsv([string]$Path) {
+    $rows = @(Import-Csv -LiteralPath $Path -Encoding UTF8)
+    if (-not $rows.Count) { return @() }
+    $cols = @($rows[0].PSObject.Properties.Name)
+    $pick = { param([string[]]$Names) foreach ($n in $Names) { $c = @($cols | Where-Object { $_ -ieq $n })[0]; if ($c) { return $c } }; return $null }
+    $cPw = & $pick @('password', 'login_password', 'Passwort', 'Kennwort')
+    if (-not $cPw) { throw 'In der Datei wurde keine Spalte "password" gefunden - bitte die Export-Datei (CSV) des Browsers oder Passwort-Managers wählen.' }
+    $cUrl = & $pick @('url', 'login_uri', 'origin', 'Website', 'name', 'Title')
+    $cUser = & $pick @('username', 'login_username', 'Benutzername', 'user', 'email')
+    foreach ($r in $rows) {
+        $pw = [string]$r.$cPw; if (-not $pw) { continue }
+        $site = $(if ($cUrl) { [string]$r.$cUrl } else { '' }); try { if ($site -match '^[a-z]+://') { $site = ([Uri]$site).Host } } catch { }
+        $u = $(if ($cUser) { [string]$r.$cUser } else { '' })
+        $uMask = $(if ($u.Length -le 2) { $u } elseif ($u -match '^(.{2})[^@]*(@.*)$') { $Matches[1] + '***' + $Matches[2] } else { $u.Substring(0, 2) + '***' })
+        $weak = ($pw.Length -lt 10) -or ($pw -match '^\d+$') -or ($pw -match '^[a-zA-Z]+$' -and $pw.Length -lt 14)
+        [pscustomobject]@{ Site = $site; User = $uMask; Hash = (Get-Sha1Hex $pw); Len = $pw.Length; Weak = [bool]$weak }
+    }
+}
+function Get-PwCheckRows($Entries, $Counts) {
+    $e = @(@($Entries) | Where-Object { $_ })
+    $reuse = @{}; foreach ($x in $e) { if (-not $reuse.ContainsKey($x.Hash)) { $reuse[$x.Hash] = 0 }; $reuse[$x.Hash]++ }
+    foreach ($x in $e) {
+        $n = [int64]0; if ($Counts -and $Counts.ContainsKey($x.Hash)) { $n = [int64]$Counts[$x.Hash] }
+        $why = [System.Collections.Generic.List[string]]::new()
+        if ($n -gt 0) { $why.Add(('in {0:N0} Datenlecks bekannt - sofort ändern' -f $n)) }
+        if ($reuse[$x.Hash] -gt 1) { $why.Add(('auf {0} Seiten gleich' -f $reuse[$x.Hash])) }
+        if ($x.Weak) { $why.Add('zu einfach') }
+        $lvl = $(if ($n -gt 0) { 0 } elseif ($reuse[$x.Hash] -gt 1) { 1 } elseif ($x.Weak) { 2 } else { 3 })
+        [pscustomobject]@{ Site = $x.Site; User = $x.User; Result = $(if ($why.Count) { $why -join ' · ' } else { 'in Ordnung' }); Sort = $lvl; Level = $(switch ($lvl) { 0 { 'Error' } 1 { 'Warn' } 2 { 'Warn' } default { '' } }) }
+    }
+}
+function Remove-FileSecure([string]$Path) {
+    $fi = Get-Item -LiteralPath $Path -ErrorAction Stop
+    $len = [int64]$fi.Length; $buf = New-Object byte[] 65536; $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    $fs = [IO.File]::Open($fi.FullName, 'Open', 'Write', 'None')
+    try { $done = [int64]0; while ($done -lt $len) { $rng.GetBytes($buf); $n = [int][math]::Min($buf.Length, $len - $done); $fs.Write($buf, 0, $n); $done += $n }; $fs.Flush($true) } finally { $fs.Dispose(); $rng.Dispose() }
+    Remove-Item -LiteralPath $fi.FullName -Force -ErrorAction Stop
+}
 function Get-BlKeyFolder { $d = Join-Path $DataDir 'BitLocker-Schluessel'; New-Item $d -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null; return $d }
 function Write-BlKeyInfo([string]$Folder) {
     $info = Join-Path $Folder 'WICHTIG - unbedingt sichern.txt'
@@ -21906,7 +21963,15 @@ $pageSecurity = New-Page 'Sicherheit' 'Alle Schutzfunktionen dieses PCs auf eine
     (New-Card 'BitLocker-Laufwerksverschlüsselung' @(
         '<TextBlock x:Name="BlInfo" Text="Schützt die Daten, wenn der Laptop gestohlen wird. Den Wiederherstellungsschlüssel unbedingt außerhalb des PCs aufbewahren (USB-Stick, Ausdruck, Microsoft-Konto)." Foreground="#6B7890" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,6"/>',
         (New-White (New-DataGrid 'BlGrid' @('Laufwerk|Drive|80', 'Zustand|State|170', 'Verschlüsselt|Pct|100', 'Methode|Method|130', 'Entsperren über|Protectors|*') 'Height="140"')),
-        '<WrapPanel Margin="0,8,0,0"><Button x:Name="BtnBlOneClick" Content="C: mit einem Klick verschlüsseln" ToolTip="Verschlüsselt das Windows-Laufwerk und legt den Wiederherstellungsschlüssel automatisch im PC-Tools-Ordner ab."/><Button x:Name="BtnBlKeyFolder" Content="Schlüssel-Ordner öffnen" Style="{StaticResource Sec}"/><Button x:Name="BtnBlOn" Content="Anderes Laufwerk verschlüsseln ..." Style="{StaticResource Sec}"/><Button x:Name="BtnBlKey" Content="Schlüssel auf USB-Stick sichern ..." Style="{StaticResource Sec}"/><Button x:Name="BtnBlSuspend" Content="Für 1 Neustart aussetzen (BIOS-Update)" Style="{StaticResource Sec}"/><Button x:Name="BtnBlResume" Content="Fortsetzen" Style="{StaticResource Sec}"/><Button x:Name="BtnBlOff" Content="Entschlüsseln" Style="{StaticResource Sec}"/><Button x:Name="BtnBlMsSave" Content="Im Microsoft-Konto sichern"/><Button x:Name="BtnBlOnline" Content="Schlüssel im Microsoft-Konto ansehen" Style="{StaticResource Sec}"/></WrapPanel>')) +
+        '<WrapPanel Margin="0,8,0,0"><Button x:Name="BtnBlWizard" Content="BitLocker-Assistent ..." ToolTip="Schritt für Schritt: prüfen, verschlüsseln und den Schlüssel an mehreren sicheren Orten ablegen"/><Button x:Name="BtnBlOneClick" Content="C: mit einem Klick verschlüsseln" Style="{StaticResource Sec}" ToolTip="Verschlüsselt das Windows-Laufwerk und legt den Wiederherstellungsschlüssel automatisch im PC-Tools-Ordner ab."/><Button x:Name="BtnBlKeyFolder" Content="Schlüssel-Ordner öffnen" Style="{StaticResource Sec}"/><Button x:Name="BtnBlOn" Content="Anderes Laufwerk verschlüsseln ..." Style="{StaticResource Sec}"/><Button x:Name="BtnBlKey" Content="Schlüssel auf USB-Stick sichern ..." Style="{StaticResource Sec}"/><Button x:Name="BtnBlSuspend" Content="Für 1 Neustart aussetzen (BIOS-Update)" Style="{StaticResource Sec}"/><Button x:Name="BtnBlResume" Content="Fortsetzen" Style="{StaticResource Sec}"/><Button x:Name="BtnBlOff" Content="Entschlüsseln" Style="{StaticResource Sec}"/><Button x:Name="BtnBlMsSave" Content="Im Microsoft-Konto sichern"/><Button x:Name="BtnBlOnline" Content="Schlüssel im Microsoft-Konto ansehen" Style="{StaticResource Sec}"/></WrapPanel>')) +
+    (New-Card 'Passwort-Check' @(
+        '<TextBlock Text="Prüft, ob Passwörter in bekannten Datenlecks auftauchen (Have I Been Pwned). Das Passwort verlässt den PC nie: nur die ersten 5 Zeichen seines SHA-1-Fingerabdrucks werden abgefragt, der Vergleich passiert hier auf dem PC." Foreground="#6B7890" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>',
+        '<WrapPanel><TextBlock Text="Ein Passwort prüfen:" VerticalAlignment="Center" Margin="0,0,8,8" Foreground="#1F2A44"/><PasswordBox x:Name="PwOne" Width="260" Padding="4,5" Margin="0,0,8,8" VerticalAlignment="Center"/><Button x:Name="BtnPwOne" Content="Prüfen"/><TextBlock x:Name="PwOneInfo" Text="" VerticalAlignment="Center" FontWeight="SemiBold" Margin="4,0,0,8" TextWrapping="Wrap" MaxWidth="520"/></WrapPanel>',
+        '<TextBlock Text="Alle gespeicherten Passwörter prüfen: im Browser exportieren (Edge: Einstellungen &gt; Kennwörter &gt; ... &gt; Kennwörter exportieren · Chrome: Passwortmanager &gt; Einstellungen &gt; Passwörter exportieren · Firefox: Passwörter &gt; ... &gt; Zugangsdaten exportieren), dann die Datei hier wählen. PC-Tools löscht die Export-Datei danach auf Wunsch sicher." Foreground="#475569" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,6"/>',
+        '<WrapPanel><Button x:Name="BtnPwCsv" Content="Export-Datei prüfen ..."/><Button x:Name="BtnPwEdge" Content="Edge-Kennwörter öffnen" Style="{StaticResource Sec}"/><Button x:Name="BtnPwChrome" Content="Chrome-Passwortmanager öffnen" Style="{StaticResource Sec}"/><Button x:Name="BtnPwDelCsv" Content="Export-Datei sicher löschen" Style="{StaticResource Sec}" IsEnabled="False"/></WrapPanel>',
+        '<TextBlock x:Name="PwInfo" Text="" Foreground="#1F2A44" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,4,0,6"/>',
+        (New-White (New-DataGrid 'PwGrid' @('Seite|Site|220', 'Benutzer|User|170', 'Ergebnis|Result|*|Sort') 'Height="220"'))
+    )) +
     (New-Card 'Windows-Schutzfunktionen' @(
         (New-CuRow 'Benutzerkontensteuerung (UAC)' (New-TagCombo 'SecUac' @('Immer benachrichtigen (sicherste)|2', 'Standard - nur bei Programmänderungen|5', 'Ohne Bildschirmabdunkelung|5d', 'Nie benachrichtigen (nicht empfohlen)|0') 360) 'Fragt nach, bevor Programme Änderungen am System vornehmen.'),
         '<WrapPanel Margin="0,6,0,0">',
@@ -21927,6 +21992,7 @@ $pageSecurity = New-Page 'Sicherheit' 'Alle Schutzfunktionen dieses PCs auf eine
 
 # ---------------------------------------------------------------- Handbuch (wird mit jeder Version gepflegt)
 $ManualNews = @(
+    'Version 14.3: Neu auf der Seite Sicherheit - Passwort-Check: prüft einzelne Passwörter oder alle aus dem Browser exportierten gegen bekannte Datenlecks (Have I Been Pwned). Das Passwort verlässt den PC nie, nur 5 Zeichen seines Fingerabdrucks. Zeigt auch mehrfach verwendete und zu einfache Passwörter und löscht die Export-Datei danach sicher. Neu: BitLocker-Assistent - prüft TPM, Edition, Secure Boot und Netzteil, verschlüsselt und legt den Wiederherstellungsschlüssel an mehreren Orten ab (USB-Stick, Ordner/NAS, Microsoft- oder Firmenkonto, Ausdruck, Lizenz-Tresor) und kontrolliert jede Kopie.',
     'Version 14.2: Neu "Hilfe holen" - beim Zustands-Score und im Einfach-Modus. Ein Klick schickt dem Helfer einen Bericht (Zustand, Probleme, Fehler der letzten 3 Tage, Protokoll): in "Meine PCs" erscheint ein roter Hilferuf mit Bericht, aufs Handy kommt eine Nachricht (wenn eingerichtet), auf Wunsch wird eine E-Mail vorbereitet - sonst liegt der Bericht auf dem Desktop. Neu: Einfach-Modus für Eltern, Großeltern und Einsteiger - nur eine große Ampel und zwei Knöpfe "Alles reparieren" und "Hilfe holen" (Einstellungen > Stabilität oder beim ersten Start).',
     'Version 14.1: Treiber für Geräte mit Problem (z.B. Code 48/28) sucht PC-Tools jetzt gezielt - erst über Windows Update, dann über das offizielle Treiberpaket von HP, Lenovo oder Dell (Seite Geräte und "Punkte beheben"). Neu auf der Seite Autostart: Startzeit-Analyse zeigt, welche Programme, Dienste und Treiber den Start wie viele Sekunden bremsen, und entschärft sie mit einem Klick. Beim Zustands-Score: "Automatisch beheben, wenn der Score unter ... fällt" - nach jedem geplanten Lauf wird erledigt, was sicher automatisch geht, der Rest kommt als Hinweis.',
     'Version 14.0.1: Neuer Knopf "Punkte beheben" beim Zustands-Score - behebt mit einem Klick alles, was automatisch geht (Updates und Treiber nachinstallieren, Aufräumen, Autostart aufräumen, Geräte-Probleme, Virendefinitionen, Firewall) und sagt ehrlich, was nur von Hand geht (z.B. Secure Boot im BIOS). Fehlgeschlagene Updates zählen im Score nur noch, wenn sie seitdem nicht doch erfolgreich installiert wurden.',
@@ -36139,7 +36205,7 @@ function Start-ScFixAll {
             'Security' {
                 if ($why -match 'Virendefinitionen veraltet') { $acts.Add('AvSig'); $plan.Add('Virendefinitionen aktualisieren') }
                 if ($why -match 'Firewall aus') { $acts.Add('Firewall'); $plan.Add('Firewall wieder einschalten') }
-                if ($why -match 'nicht verschlüsselt') { $bitlocker = $true; $plan.Add('Verschlüsselung (BitLocker) öffnen - dort mit einem Klick einschalten, den Wiederherstellungsschlüssel bitte sicher aufbewahren') }
+                if ($why -match 'nicht verschlüsselt') { $bitlocker = $true; $plan.Add('BitLocker-Assistent öffnen: prüfen, verschlüsseln und den Wiederherstellungsschlüssel an mehreren Orten sichern') }
                 if ($why -match 'Secure Boot aus') { $hand.Add('Secure Boot lässt sich nur im BIOS/UEFI des PCs einschalten (Seite "BIOS"). Vorher prüfen, dass Windows im UEFI-Modus installiert ist - sonst startet der PC danach nicht.') }
                 if ($why -match 'KEIN Virenschutz') { $hand.Add('Kein Virenschutz aktiv: Seite "Sicherheit" öffnen und Microsoft Defender einschalten.') }
             }
@@ -36170,7 +36236,7 @@ function Start-ScFixAll {
         try { $null = Set-AutoBulk 'Recommended' -NoConfirm } catch { }
         try { $ba = @(Invoke-UiWait { Get-BootAnalysis 60 } @() @('Get-BootAnalysis') 120 'Startzeit wird analysiert ...') | Where-Object { $_ -and $_.PSObject.Properties['Items'] } | Select-Object -First 1; if ($ba) { $null = Invoke-BootFix @($ba.Items | Where-Object { $_.AvgSec -ge 1 }) -NoConfirm } } catch { }
     }
-    if ($bitlocker) { try { Start-Process 'control.exe' '/name Microsoft.BitLockerDriveEncryption' } catch { try { Start-Process 'ms-settings:deviceencryption' } catch { } } }
+    if ($bitlocker) { try { Show-BlWizard } catch { try { Start-Process 'control.exe' '/name Microsoft.BitLockerDriveEncryption' } catch { try { Start-Process 'ms-settings:deviceencryption' } catch { } } } }
     $script:ScFixRun = @($run)
     if ($acts.Count) {
         Invoke-Bg -Script { param($a) Invoke-ScQuickFixes $a } -Arguments @(, [string[]]$acts.ToArray()) -Functions @('Invoke-ScQuickFixes') -Done {
@@ -43153,6 +43219,181 @@ $ui.BtnFwNet.Add_Click({ Start-Process 'ms-settings:network-status' })
 $ui.BtnSecApply.Add_Click({ Save-Protection })
 $ui.BtnSecRecommended.Add_Click({ Set-ComboByTag $ui.SecUac '5'; foreach ($n in 'SecSmartScreen', 'SecHvci', 'SecLsa', 'SecSmb1Off', 'SecAutorunOff', 'SecGuestOff', 'SecPs2Off', 'SecExtShow') { $ui[$n].IsChecked = $true }; $ui.SecRemoteAssist.IsChecked = $false; $ui.StatusText.Text = 'Empfohlene Werte ausgewählt - mit "Schutzfunktionen übernehmen" speichern. Remotedesktop bleibt wie eingestellt.' })
 $ui.BtnBlOneClick.Add_Click({ Invoke-BlOneClick })
+# ---- BitLocker-Assistent (14.3)
+function Get-BlWizChecks {
+    $c = [System.Collections.Generic.List[object]]::new()
+    $add = { param($ok, $t, $d) $c.Add([pscustomobject]@{ Ok = $ok; Icon = $(if ($ok -eq $true) { '✓' } elseif ($ok -eq $false) { '✗' } else { '!' }); Text = $t; Detail = $d }) }
+    $v = $null; $edOk = $true; try { $v = Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction Stop } catch { $edOk = $false }
+    $ed = ''; try { $ed = [string](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').EditionID } catch { }
+    if (-not $edOk -or $ed -match '^Core') { & $add $false 'Windows-Edition' ('{0}: BitLocker gibt es erst ab Windows Pro. Viele Geräte haben stattdessen die Geräteverschlüsselung (Einstellungen > Datenschutz und Sicherheit > Geräteverschlüsselung).' -f $(if ($ed) { $ed } else { 'Home' })) }
+    else { & $add $true 'Windows-Edition' ('{0} - BitLocker verfügbar' -f $ed) }
+    $tpm = $null; try { $tpm = Get-Tpm -ErrorAction Stop } catch { }
+    if ($tpm -and $tpm.TpmReady) { & $add $true 'TPM-Chip' 'bereit - der PC entsperrt sich beim Start automatisch' } else { & $add $false 'TPM-Chip' 'nicht bereit - im BIOS/UEFI einschalten (oft "Security Chip", "PTT" oder "fTPM"), Seite BIOS-Einstellungen' }
+    $sb = $null; try { $sb = Confirm-SecureBootUEFI -ErrorAction Stop } catch { }
+    if ($sb -eq $true) { & $add $true 'Secure Boot' 'an' } elseif ($sb -eq $false) { & $add $null 'Secure Boot' 'aus - BitLocker geht trotzdem, empfohlen ist es an' } else { & $add $null 'Secure Boot' 'nicht prüfbar (älteres BIOS-Startverfahren?)' }
+    $bat = @(Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue)
+    if ($bat.Count) { $ac = @($bat | Where-Object { [int]$_.BatteryStatus -in 2, 6, 7, 8, 9 }).Count; if ($ac) { & $add $true 'Stromversorgung' 'Netzteil angeschlossen' } else { & $add $null 'Stromversorgung' 'Akku-Betrieb - für die erste Verschlüsselung bitte das Netzteil anschließen' } }
+    $state = 'unbekannt'; $on = $false; $pct = 0
+    if ($v) { $on = ([string]$v.ProtectionStatus -eq 'On') -or ([string]$v.VolumeStatus -match 'Encrypt'); $pct = [int]$v.EncryptionPercentage; $state = '{0} ({1} % verschlüsselt, Schutz {2})' -f $v.VolumeStatus, $pct, $(if ([string]$v.ProtectionStatus -eq 'On') { 'an' } else { 'aus' }) }
+    & $add $(if ($on) { $true } else { $null }) ('Laufwerk ' + $env:SystemDrive) $state
+    [pscustomobject]@{ Checks = $c.ToArray(); CanEncrypt = [bool]($edOk -and $ed -notmatch '^Core' -and $tpm -and $tpm.TpmReady); IsOn = $on; Volume = $v; Pct = $pct }
+}
+function Get-BlKeyLines([string]$Drive) {
+    $v = Get-BitLockerVolume -MountPoint $Drive -ErrorAction Stop
+    $keys = @($v.KeyProtector | Where-Object { [string]$_.KeyProtectorType -eq 'RecoveryPassword' })
+    if (-not $keys.Count) { return $null }
+    $txt = @('BitLocker-Wiederherstellungsschlüssel', ('PC: {0}   Laufwerk: {1}   gesichert: {2:dd.MM.yyyy HH:mm}' -f $env:COMPUTERNAME, $Drive, (Get-Date)), '')
+    foreach ($k in $keys) { $txt += ('Kennung: {0}' -f $k.KeyProtectorId); $txt += ('Schlüssel: {0}' -f $k.RecoveryPassword); $txt += '' }
+    $txt += 'Diesen Zettel bzw. diese Datei NICHT auf dem PC selbst aufbewahren. Ohne den Schlüssel sind die Daten nach einem Defekt verloren.'
+    [pscustomobject]@{ Lines = $txt; Keys = $keys }
+}
+function Get-BlUsbDrives { @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=2' -ErrorAction SilentlyContinue | ForEach-Object { '{0} {1} ({2:N1} GB frei)' -f $_.DeviceID, $(if ($_.VolumeName) { $_.VolumeName } else { 'USB' }), ([double]$_.FreeSpace / 1GB) }) }
+function Show-BlWizard {
+    $x = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="PC-Tools - BitLocker-Assistent" Width="780" SizeToContent="Height" WindowStartupLocation="CenterOwner" ResizeMode="NoResize" FontFamily="Segoe UI" FontSize="13.5" Background="#F4F6FA">
+  <StackPanel Margin="24">
+    <TextBlock Text="BitLocker-Assistent" FontSize="22" FontWeight="SemiBold" Foreground="#1F2A44"/>
+    <TextBlock Text="Verschlüsselt das Windows-Laufwerk, damit bei Diebstahl niemand an die Daten kommt. Wichtig ist der Wiederherstellungsschlüssel: Er wird an mehreren Orten abgelegt - mindestens einer davon außerhalb des PCs." TextWrapping="Wrap" Foreground="#475569" Margin="0,6,0,14"/>
+    <TextBlock Text="1. Prüfung" FontWeight="SemiBold" FontSize="15" Foreground="#1F2A44"/>
+    <Border Background="White" CornerRadius="10" Padding="12,8" Margin="0,6,0,14" BorderBrush="#E2E7F0" BorderThickness="1"><ItemsControl x:Name="WzChecks"><ItemsControl.ItemTemplate><DataTemplate><Grid Margin="0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="26"/><ColumnDefinition Width="150"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="{Binding Icon}" FontWeight="Bold" FontSize="15"/><TextBlock Grid.Column="1" Text="{Binding Text}" FontWeight="SemiBold" Foreground="#1F2A44"/><TextBlock Grid.Column="2" Text="{Binding Detail}" TextWrapping="Wrap" Foreground="#475569"/></Grid></DataTemplate></ItemsControl.ItemTemplate></ItemsControl></Border>
+    <TextBlock Text="2. Wohin mit dem Schlüssel? (mindestens zwei Orte empfohlen)" FontWeight="SemiBold" FontSize="15" Foreground="#1F2A44"/>
+    <Border Background="White" CornerRadius="10" Padding="12,10" Margin="0,6,0,14" BorderBrush="#E2E7F0" BorderThickness="1">
+      <StackPanel>
+        <WrapPanel><CheckBox x:Name="WzUsb" Content="USB-Stick:" VerticalAlignment="Center" Width="170" Margin="0,4"/><ComboBox x:Name="WzUsbList" Uid="notr" Width="300" Margin="0,4,8,4"/><Button x:Name="WzUsbRefresh" Content="Neu suchen" Padding="10,4" Margin="0,4"/></WrapPanel>
+        <WrapPanel><CheckBox x:Name="WzDir" Content="Ordner / NAS:" VerticalAlignment="Center" Width="170" Margin="0,4"/><TextBox x:Name="WzDirPath" Width="300" Padding="4,3" Margin="0,4,8,4"/><Button x:Name="WzDirPick" Content="Durchsuchen ..." Padding="10,4" Margin="0,4"/></WrapPanel>
+        <CheckBox x:Name="WzMs" Content="Microsoft-Konto bzw. Firmenkonto (Entra/AD)" Margin="0,6,0,0"/>
+        <CheckBox x:Name="WzPrint" Content="Ausdrucken (Zettel gut wegschließen)" Margin="0,6,0,0"/>
+        <CheckBox x:Name="WzVault" Content="Lizenz-Tresor von PC-Tools (verschlüsselt, zusätzlich)" Margin="0,6,0,0"/>
+        <TextBlock Text="Immer: eine Kopie im PC-Tools-Ordner auf diesem PC (nützt nur, solange der PC startet)." Foreground="#6B7890" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap"/>
+      </StackPanel>
+    </Border>
+    <TextBlock Text="3. Los geht's" FontWeight="SemiBold" FontSize="15" Foreground="#1F2A44"/>
+    <TextBlock x:Name="WzState" Text="" TextWrapping="Wrap" Foreground="#1F2A44" Margin="0,6,0,6"/>
+    <ProgressBar x:Name="WzProg" Height="10" Minimum="0" Maximum="100" Foreground="#2D7FF9" Background="#E3E8F2" BorderThickness="0" Visibility="Collapsed" Margin="0,0,0,8"/>
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+      <Button x:Name="WzGo" Content="Verschlüsseln und Schlüssel sichern" Padding="18,9" Margin="0,0,10,0"/>
+      <Button x:Name="WzClose" Content="Schließen" Padding="18,9" IsCancel="True"/>
+    </StackPanel>
+  </StackPanel>
+</Window>
+"@
+    $w = [Windows.Markup.XamlReader]::Parse((Convert-ThemeXaml $x)); try { $w.Owner = $window } catch { }
+    $script:BlWz = @{}; foreach ($n in 'WzChecks', 'WzUsb', 'WzUsbList', 'WzUsbRefresh', 'WzDir', 'WzDirPath', 'WzDirPick', 'WzMs', 'WzPrint', 'WzVault', 'WzState', 'WzProg', 'WzGo', 'WzClose') { $script:BlWz[$n] = $w.FindName($n) }
+    $script:BlWz.Win = $w
+    $script:BlWzFill = {
+        $z = $script:BlWz
+        $chk = Get-BlWizChecks; $script:BlWz.Chk = $chk
+        $z.WzChecks.ItemsSource = @($chk.Checks)
+        $z.WzGo.Content = $(if ($chk.IsOn) { 'Schlüssel jetzt sichern' } else { 'Verschlüsseln und Schlüssel sichern' })
+        $z.WzGo.IsEnabled = [bool]($chk.IsOn -or $chk.CanEncrypt)
+        if (-not $chk.IsOn -and -not $chk.CanEncrypt) { $z.WzState.Text = 'Erst die rot markierten Punkte beheben - dann diesen Assistenten noch einmal öffnen.' }
+        elseif ($chk.IsOn) { $z.WzState.Text = 'BitLocker ist bereits an. Hier kannst du den Schlüssel zusätzlich an weiteren Orten sichern.' }
+        else { $z.WzState.Text = 'Der PC bleibt während der Verschlüsselung normal nutzbar. Beim Start musst du nichts eingeben.' }
+    }
+    $script:BlWzUsb = { $l = $script:BlWz.WzUsbList; $l.Items.Clear(); foreach ($u in (Get-BlUsbDrives)) { [void]$l.Items.Add($u) }; if ($l.Items.Count) { $l.SelectedIndex = 0; $script:BlWz.WzUsb.IsChecked = $true } else { [void]$l.Items.Add((T 'kein USB-Stick gefunden - einstecken und "Neu suchen"')); $l.SelectedIndex = 0; $script:BlWz.WzUsb.IsChecked = $false } }
+    & $script:BlWzFill; & $script:BlWzUsb
+    $script:BlWz.WzMs.IsChecked = $true
+    $script:BlWz.WzUsbRefresh.Add_Click({ & $script:BlWzUsb })
+    $script:BlWz.WzDirPick.Add_Click({ Select-FolderInto $script:BlWz.WzDirPath; if ($script:BlWz.WzDirPath.Text.Trim()) { $script:BlWz.WzDir.IsChecked = $true } })
+    $script:BlWz.WzClose.Add_Click({ $script:BlWz.Win.Close() })
+    $script:BlWz.WzGo.Add_Click({ try { Invoke-BlWizardRun } catch { $script:BlWz.WzState.Text = 'Fehler: ' + $_.Exception.Message } })
+    $script:BlWzTimer = New-Object Windows.Threading.DispatcherTimer; $script:BlWzTimer.Interval = [TimeSpan]::FromSeconds(3)
+    $script:BlWzTimer.Add_Tick({ try { $v = Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction Stop; $script:BlWz.WzProg.Value = [double]$v.EncryptionPercentage; if ([string]$v.VolumeStatus -eq 'FullyEncrypted') { $script:BlWzTimer.Stop(); $script:BlWz.WzProg.Value = 100 } } catch { } })
+    $w.Add_Closed({ try { $script:BlWzTimer.Stop() } catch { }; try { Update-Security } catch { } })
+    [void]$w.ShowDialog()
+}
+function Invoke-BlWizardRun {
+    $z = $script:BlWz; $mp = $env:SystemDrive
+    $usb = ''; if ($z.WzUsb.IsChecked) { $sel = [string]$z.WzUsbList.SelectedItem; if ($sel -match '^([A-Z]:)') { $usb = $Matches[1] + '\' } else { Show-UiError 'Bitte einen USB-Stick einstecken und "Neu suchen" klicken - oder den Haken bei USB-Stick entfernen.'; return } }
+    $dir = ''; if ($z.WzDir.IsChecked) { $dir = $z.WzDirPath.Text.Trim(); if (-not $dir) { Show-UiError 'Bitte einen Ordner wählen - oder den Haken bei Ordner / NAS entfernen.'; return } }
+    $outside = [int][bool]$usb + [int][bool]$dir + [int][bool]$z.WzMs.IsChecked + [int][bool]$z.WzPrint.IsChecked
+    if (-not $outside) { if (-not (Confirm-Ui "Es ist kein Ort außerhalb des PCs gewählt. Wenn der PC kaputt geht, ist der Schlüssel dann weg - und mit ihm die Daten.`n`nTrotzdem fortfahren?" 'Warning')) { return } }
+    $chk = $script:BlWz.Chk
+    $z.WzGo.IsEnabled = $false; $z.Win.Cursor = 'Wait'
+    $log = [System.Collections.Generic.List[string]]::new()
+    try {
+        if (-not $chk.IsOn) {
+            if (-not (Confirm-Ui ("Laufwerk {0} jetzt mit BitLocker (XTS-AES 256) verschlüsseln?" -f $mp))) { return }
+            $v = Get-BitLockerVolume -MountPoint $mp -ErrorAction Stop
+            if (-not @($v.KeyProtector | Where-Object { [string]$_.KeyProtectorType -eq 'RecoveryPassword' }).Count) { $null = Add-BitLockerKeyProtector -MountPoint $mp -RecoveryPasswordProtector -ErrorAction Stop -WarningAction SilentlyContinue }
+            $null = Enable-BitLocker -MountPoint $mp -EncryptionMethod XtsAes256 -UsedSpaceOnly -TpmProtector -SkipHardwareTest -ErrorAction Stop -WarningAction SilentlyContinue
+            $log.Add('✓ BitLocker eingeschaltet - die Verschlüsselung läuft im Hintergrund.')
+        }
+        $k = Get-BlKeyLines $mp
+        if (-not $k) { throw 'Es gibt keinen Wiederherstellungsschlüssel für ' + $mp }
+        $name = 'BitLocker-Schluessel_{0}_{1}.txt' -f $env:COMPUTERNAME, ($mp -replace '[:\\]', '')
+        $first = [string]$k.Keys[0].RecoveryPassword
+        $write = { param($folder, $label)
+            try { Connect-BackupTarget $folder } catch { }
+            New-Item $folder -ItemType Directory -Force -ErrorAction Stop | Out-Null
+            $f = Join-Path $folder $name; Set-Content -LiteralPath $f -Value $k.Lines -Encoding UTF8 -ErrorAction Stop
+            if ((Get-Content -LiteralPath $f -Raw -Encoding UTF8) -notmatch [regex]::Escape($first)) { throw 'Kontrolle fehlgeschlagen' }
+            $log.Add(('✓ {0}: {1} (gespeichert und geprüft)' -f $label, $f)); return $f }
+        $local = ''; try { $local = & $write (Get-BlKeyFolder) 'PC-Tools-Ordner'; Write-BlKeyInfo (Get-BlKeyFolder) } catch { $log.Add('✗ PC-Tools-Ordner: ' + $_.Exception.Message) }
+        if ($usb) { try { $null = & $write $usb 'USB-Stick' } catch { $log.Add('✗ USB-Stick: ' + $_.Exception.Message) } }
+        if ($dir) { try { $null = & $write $dir 'Ordner' } catch { $log.Add('✗ Ordner: ' + $_.Exception.Message) } }
+        if ($z.WzVault.IsChecked) { try { try { $script:LicVault = @(Read-LicVault) } catch { }; foreach ($kp in $k.Keys) { Add-LicVaultItem ('BitLocker {0} {1}' -f $env:COMPUTERNAME, $mp) $kp.RecoveryPassword ('Kennung ' + $kp.KeyProtectorId) }; $log.Add('✓ Lizenz-Tresor') } catch { $log.Add('✗ Lizenz-Tresor: ' + $_.Exception.Message) } }
+        if ($z.WzMs.IsChecked) {
+            $ok = $false
+            foreach ($kp in $k.Keys) { try { BackupToAAD-BitLockerKeyProtector -MountPoint $mp -KeyProtectorId $kp.KeyProtectorId -ErrorAction Stop | Out-Null; $ok = $true } catch { } }
+            if (-not $ok) { foreach ($kp in $k.Keys) { try { Backup-BitLockerKeyProtector -MountPoint $mp -KeyProtectorId $kp.KeyProtectorId -ErrorAction Stop | Out-Null; $ok = $true } catch { } } }
+            if ($ok) { $log.Add('✓ Firmen-/Schulkonto (Entra/AD)') }
+            else { $log.Add('! Microsoft-Konto: in den BitLocker-Einstellungen bei ' + $mp + ' auf "Wiederherstellungsschlüssel sichern" > "In Microsoft-Konto speichern" klicken (wird geöffnet). Prüfen: account.microsoft.com/devices/recoverykey'); try { Start-Process 'control.exe' '/name Microsoft.BitLockerDriveEncryption' } catch { } }
+        }
+        if ($z.WzPrint.IsChecked -and $local) { try { Start-Process 'notepad.exe' -ArgumentList '/p', ('"{0}"' -f $local); $log.Add('✓ Druck gestartet (Standarddrucker)') } catch { $log.Add('✗ Drucken: ' + $_.Exception.Message) } }
+        $z.WzState.Text = ($log -join "`n")
+        $z.WzProg.Visibility = 'Visible'; $script:BlWzTimer.Start()
+        $ui.StatusText.Text = 'BitLocker-Assistent: fertig.'
+    } catch { $z.WzState.Text = (($log + @('✗ ' + $_.Exception.Message)) -join "`n") }
+    finally { $z.Win.Cursor = $null; $z.WzGo.IsEnabled = $true; $z.WzGo.Content = 'Schlüssel jetzt sichern' }
+}
+$ui.BtnBlWizard.Add_Click({ try { Show-BlWizard } catch { Show-UiError ('BitLocker-Assistent: ' + $_.Exception.Message) } })
+# ---- Passwort-Check (14.3)
+$script:PwCsv = ''
+$ui.BtnPwOne.Add_Click({
+    $pw = [string]$ui.PwOne.Password
+    if (-not $pw) { $ui.PwOneInfo.Text = 'Bitte zuerst ein Passwort eingeben.'; return }
+    $h = Get-Sha1Hex $pw; $ui.PwOne.Password = ''; $pw = $null
+    $ui.PwOneInfo.Text = 'wird geprüft ...'; $ui.BtnPwOne.IsEnabled = $false
+    Invoke-Bg -Script { param($x) Get-PwnedCounts @($x) } -Arguments @($h) -Functions @('Get-PwnedCounts') -Done {
+        param($r, $e)
+        $ui.BtnPwOne.IsEnabled = $true
+        $m = @($r | Where-Object { $_ -is [hashtable] })[0]
+        if ($e -or -not $m) { $ui.PwOneInfo.Foreground = New-UiBrush '#B45309'; $ui.PwOneInfo.Text = 'Prüfung nicht möglich: ' + $(if ($e) { $e.Message } else { 'keine Antwort' }); return }
+        $n = [int64]@($m.Values)[0]
+        if ($n -gt 0) { $ui.PwOneInfo.Foreground = New-UiBrush '#DC2626'; $ui.PwOneInfo.Text = ('Achtung: in {0:N0} Datenlecks bekannt - dieses Passwort nirgends mehr verwenden.' -f $n) }
+        else { $ui.PwOneInfo.Foreground = New-UiBrush '#15803D'; $ui.PwOneInfo.Text = 'In keinem bekannten Datenleck gefunden.' }
+    }
+})
+$ui.PwOne.Add_KeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $ui.BtnPwOne.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.Primitives.ButtonBase]::ClickEvent))) } })
+$ui.BtnPwCsv.Add_Click({
+    Add-Type -AssemblyName System.Windows.Forms
+    $d = New-Object System.Windows.Forms.OpenFileDialog; $d.Filter = 'Passwort-Export (*.csv)|*.csv|Alle Dateien (*.*)|*.*'; $d.Title = 'Export-Datei des Browsers wählen'
+    try { $d.InitialDirectory = (New-Object -ComObject Shell.Application).NameSpace('shell:Downloads').Self.Path } catch { }
+    if ($d.ShowDialog() -ne 'OK') { return }
+    $script:PwCsv = $d.FileName
+    $entries = @(); try { $entries = @(Read-PasswordCsv $script:PwCsv) } catch { Show-UiError $_.Exception.Message; return }
+    if (-not $entries.Count) { Show-UiError 'In der Datei stehen keine Passwörter.'; return }
+    $ui.BtnPwDelCsv.IsEnabled = $true
+    $ui.PwInfo.Text = ('{0} Einträge werden geprüft ...' -f $entries.Count); $ui.BtnPwCsv.IsEnabled = $false
+    $script:PwEntries = $entries
+    Invoke-Bg -Script { param($h) Get-PwnedCounts $h } -Arguments @(, [string[]]@($entries | ForEach-Object { $_.Hash })) -Functions @('Get-PwnedCounts') -Done {
+        param($r, $e)
+        $ui.BtnPwCsv.IsEnabled = $true
+        $m = @($r | Where-Object { $_ -is [hashtable] })[0]
+        if ($e -or -not $m) { $ui.PwInfo.Text = 'Prüfung nicht möglich: ' + $(if ($e) { $e.Message } else { 'keine Antwort' }); return }
+        $rows = @(Get-PwCheckRows $script:PwEntries $m | Sort-Object Sort, Site)
+        Set-GridItems $ui.PwGrid $rows
+        $leak = @($rows | Where-Object { $_.Sort -eq 0 }).Count; $re = @($rows | Where-Object { $_.Sort -eq 1 }).Count; $wk = @($rows | Where-Object { $_.Sort -eq 2 }).Count
+        $ui.PwInfo.Text = ('{0} Passwörter geprüft: {1} in Datenlecks · {2} mehrfach verwendet · {3} zu einfach · {4} in Ordnung. Betroffene Passwörter auf der jeweiligen Seite ändern (am besten ein eigenes pro Seite).' -f $rows.Count, $leak, $re, $wk, @($rows | Where-Object { $_.Sort -eq 3 }).Count)
+        $script:PwEntries = $null
+        if (Confirm-Ui ("Die Export-Datei enthält alle Passwörter im Klartext.`n`nJetzt sicher löschen (überschreiben und entfernen)?`n`n" + $script:PwCsv) 'Warning') { try { Remove-FileSecure $script:PwCsv; $ui.BtnPwDelCsv.IsEnabled = $false; $ui.StatusText.Text = 'Export-Datei sicher gelöscht.' } catch { Show-UiError ('Löschen fehlgeschlagen: ' + $_.Exception.Message) } }
+    }
+})
+$ui.BtnPwDelCsv.Add_Click({ if ($script:PwCsv -and (Test-Path -LiteralPath $script:PwCsv)) { try { Remove-FileSecure $script:PwCsv; $ui.BtnPwDelCsv.IsEnabled = $false; $ui.StatusText.Text = 'Export-Datei sicher gelöscht.' } catch { Show-UiError $_.Exception.Message } } else { $ui.BtnPwDelCsv.IsEnabled = $false } })
+$ui.BtnPwEdge.Add_Click({ try { Start-Process 'msedge.exe' 'edge://wallet/passwords' } catch { try { Start-Process 'msedge.exe' 'edge://settings/passwords' } catch { Show-UiError 'Microsoft Edge wurde nicht gefunden.' } } })
+$ui.BtnPwChrome.Add_Click({ try { Start-Process 'chrome.exe' 'chrome://password-manager/checkup' } catch { Show-UiError 'Google Chrome wurde nicht gefunden.' } })
 $ui.BtnBlKeyFolder.Add_Click({ $f = Get-BlKeyFolder; Write-BlKeyInfo $f; try { Start-Process explorer.exe $f } catch { }; $ui.StatusText.Text = 'Schlüssel-Ordner geöffnet: ' + $f })
 $ui.BtnBlOn.Add_Click({ Enable-BlDrive })
 $ui.BtnBlKey.Add_Click({ $r = Get-BlSelected; if ($r) { $null = Save-BlKey $r.Drive } })
