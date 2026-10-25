@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Auto, [switch]$Run, [string]$Parts = '', [switch]$Analyze, [switch]$CheckOnly, [string]$RunId = '', [string]$AppsFile = '', [string]$WingetFile = '', [string]$DirectFile = '', [string]$Monitor = '', [switch]$DeskArrange, [string]$Topology = '', [int]$Delay = 0, [switch]$Silent, [switch]$Install, [string]$JobFile = '', [switch]$Backup, [switch]$FleetPoll, [string]$FirstLogon = '', [switch]$NetDiag, [switch]$TbSync, [switch]$WinRepair, [switch]$NetDeep, [string]$DeepOpts = '', [switch]$FullBackup, [switch]$FullRepair, [switch]$NetDoc, [switch]$Sign, [string]$SignOpts = '', [string]$ChocoFile = '')
 
-$AppVersion = '14.0.1'
+$AppVersion = '14.1'
 $DefaultUpdateSource = 'github:rhedv42-sudo/pc-tools@stable'
 # Portabel (USB-Stick): Datei portable.txt neben dem Skript -> Einstellungen/Protokolle im Ordner Daten auf dem Stick
 $Script:IsPortable = [bool]($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'portable.txt')))
@@ -1357,6 +1357,7 @@ function Invoke-PflegeRun {
         $doRs    = ($Parts -contains 'RescueStick') -and $exec
         $doCcRun = ($Parts -contains 'CleanerRun') -and $exec
         $doCcWip = ($Parts -contains 'CleanerWipe') -and $exec
+        $doPdrv  = ($Parts -contains 'ProblemDrivers') -and -not $Analyze
         $mode    = if ($Analyze) { 'Analyse (Probelauf, nichts wird gelöscht)' } elseif ($CheckOnly) { 'Update-Prüfung' } else { 'Ausführung' }
         Write-PLog ('===== PC-Tools {0} | {1} | {2} =====' -f $env:COMPUTERNAME, $mode, ($Parts -join ', '))
         Write-PLog ('Konto: {0}' -f [Security.Principal.WindowsIdentity]::GetCurrent().Name)
@@ -1397,6 +1398,7 @@ function Invoke-PflegeRun {
         if ($doScan)  { & $add 'Virenprüfung' { Invoke-DefenderScan } $false }
         if ($doBloat) { & $add 'Apps entfernen' { Invoke-Debloat } $false }
         if ($doWinF)  { & $add 'Windows-Funktionen installieren' { Invoke-WinFeatures } $false }
+        if ($doPdrv)  { & $add 'Treiber für Geräte mit Problem' { Invoke-ProblemDriversStep $true } $false }
         if ($doWuDrv) { & $add 'Treiber aus Windows Update' { Invoke-WUDrivers -Ids @($Script:JobOpts.DriverIds) } $false }
         if ($doOemD)  { & $add 'Hersteller-Treiber und BIOS' { Invoke-OemUpdates } $false }
         if ($doGpu)   { & $add 'Grafiktreiber' { Invoke-GpuDriverUpdate } $false }
@@ -1562,6 +1564,7 @@ function Get-DefaultConfig {
         Cleaner = [ordered]@{ InSchedule = $false; Items = ''; KeepCookies = '' }
         OneClick = [ordered]@{ Updates = $true; Drivers = $true; Programs = $true; Repair = $true; AutoRepair = $false }
         DriverSafety = [ordered]@{ Enabled = $true; Keep = 5 }
+        AutoFix = [ordered]@{ Enabled = $true; Below = 85 }
         Assistant = [ordered]@{ Provider = ''; Model = ''; CustomUrl = ''; AutoDiag = $true; AutoCloud = $false; Weekly = $true; Speak = $false; SaveChat = $true; Memory = $true; KeyScope = 'Nur mein Windows-Konto'; MonthlyLimit = 0; MaxTokens = 1024; CtxPage = $true; CtxSystem = $false; CtxHealth = $false; CtxLog = $false; CtxSelection = $true; ErrorButton = $true }
         Integrate = [ordered]@{ MqttEnabled = $false; MqttHost = ''; MqttPort = 1883; MqttUser = ''; MqttTopic = 'pcpflege'; HaEnabled = $false; HaUrl = ''; RmmEnabled = $false; RmmUrl = '' }
         Notify = [ordered]@{ Enabled = $false; Ntfy = ''; HaWebhook = ''; ChatWebhook = ''; OnRed = $true; OnWarn = $true; OnBackup = $true; OnBluescreen = $true; OnRecover = $true }
@@ -4322,6 +4325,7 @@ function Invoke-AfterRun {
     $run = $null; try { $run = Get-Content (Join-Path $DataDir 'lastrun.json') -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
     try { Invoke-NotifyCheck $items $run } catch { }
     try { Send-Integrations | Out-Null } catch { }
+    if ($Script:IsAuto) { try { Invoke-AutoFix } catch { } }
 }
 function Get-BootTimes {
     $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-Diagnostics-Performance/Operational'; Id = 100 } -MaxEvents 20 -ErrorAction SilentlyContinue)
@@ -8014,6 +8018,136 @@ $KsRoles = @(
 # =====================================================================
 # Bestandteile des Scores: Schlüssel, Anzeigename, Spaltenname in Score.csv (ohne Umlaute). Als Funktion, damit es auch in Invoke-Bg-Runspaces verfügbar ist.
 function Get-ScComponentDefs { @(@('Security', 'Sicherheit', 'Sicherheit'), @('Updates', 'Updates', 'Updates'), @('Space', 'Speicherplatz', 'Speicherplatz'), @('Disk', 'Datenträger', 'Datentraeger'), @('Battery', 'Akku', 'Akku'), @('Stability', 'Stabilität', 'Stabilitaet'), @('Boot', 'Startzeit', 'Startzeit'), @('Devices', 'Geräte', 'Geraete'), @('Temp', 'Temperatur', 'Temperatur')) }
+
+# ---------------------------------------------------------------- 14.1: Treiber für Problemgeräte (Windows Update gezielt, dann Hersteller-Paket)
+function Get-ProblemDevices {
+    $ign = @(); try { $ign = @((Get-ItemProperty 'HKLM:\SOFTWARE\PCPflege' -Name DevIgnore -ErrorAction Stop).DevIgnore) } catch { }
+    $out = [System.Collections.Generic.List[object]]::new()
+    foreach ($d in @(Get-CimInstance Win32_PnPEntity -OperationTimeoutSec 20 -ErrorAction Stop | Where-Object { $_.ConfigManagerErrorCode -and [int]$_.ConfigManagerErrorCode -notin 22, 45 })) {
+        if ($ign -contains [string]$d.PNPDeviceID) { continue }
+        $out.Add([pscustomobject]@{ Name = $(if ($d.Name) { [string]$d.Name } else { [string]$d.PNPDeviceID }); InstanceId = [string]$d.PNPDeviceID; Code = [int]$d.ConfigManagerErrorCode; HwIds = @(@($d.HardwareID) + @($d.CompatibleID) | Where-Object { $_ } | ForEach-Object { ([string]$_).ToUpper() }) })
+    }
+    return $out.ToArray()
+}
+# Sucht in Windows Update gezielt Treiber für Geräte mit Problem und installiert sie. Gibt Textzeilen zurück.
+function Install-ProblemDeviceDrivers([switch]$CheckOnly) {
+    $log = [System.Collections.Generic.List[string]]::new()
+    $devs = @(Get-ProblemDevices)
+    if (-not $devs.Count) { $log.Add('Keine Geräte mit Problem - nichts zu tun.'); return $log.ToArray() }
+    $log.Add(('{0} Gerät(e) mit Problem: {1}' -f $devs.Count, ((@($devs | ForEach-Object { '{0} (Code {1})' -f $_.Name, $_.Code })) -join ', ')))
+    $ids = @{}; foreach ($d in $devs) { foreach ($h in $d.HwIds) { if (-not $ids.ContainsKey($h)) { $ids[$h] = $d.Name } } }
+    try {
+        $ses = New-Object -ComObject Microsoft.Update.Session; $ses.ClientApplicationID = 'PC-Tools'
+        $sr = $ses.CreateUpdateSearcher(); $sr.Online = $true
+        $res = $sr.Search("IsInstalled=0 and Type='Driver'")
+        $col = New-Object -ComObject Microsoft.Update.UpdateColl
+        foreach ($u in $res.Updates) {
+            $hw = ([string]$u.DriverHardwareID).ToUpper()
+            if ($hw -and $ids.ContainsKey($hw)) { $log.Add(('  passender Treiber: {0} (für {1})' -f $u.Title, $ids[$hw])); if (-not $u.EulaAccepted) { try { $u.AcceptEula() } catch { } }; [void]$col.Add($u) }
+        }
+        if (-not $col.Count) { $log.Add('Windows Update hat keinen passenden Treiber für diese Geräte.'); return $log.ToArray() }
+        if ($CheckOnly) { $log.Add(('{0} Treiber würden installiert.' -f $col.Count)); return $log.ToArray() }
+        $dl = $ses.CreateUpdateDownloader(); $dl.Updates = $col; $null = $dl.Download()
+        $ins = $ses.CreateUpdateInstaller(); $ins.Updates = $col; $r = $ins.Install()
+        for ($i = 0; $i -lt $col.Count; $i++) {
+            $rc = [int]$r.GetUpdateResult($i).ResultCode
+            $log.Add(('  {0}: {1}' -f $col.Item($i).Title, $(switch ($rc) { 2 { 'installiert' } 3 { 'installiert (mit Fehlern)' } 4 { 'fehlgeschlagen' } 5 { 'abgebrochen' } default { 'Code ' + $rc } })))
+        }
+        if ($r.RebootRequired) { $log.Add('Neustart nötig, damit die Treiber aktiv werden.') }
+    } catch { $log.Add('Windows-Update-Suche nicht möglich: ' + $_.Exception.Message) }
+    return $log.ToArray()
+}
+# Engine-Schritt (Teil "ProblemDrivers"): erst Windows Update gezielt, dann - wenn noch Probleme - das Treiberpaket des Herstellers (installiert nur passende, neuere Treiber)
+function Invoke-ProblemDriversStep([bool]$AllowPack = $true) {
+    foreach ($l in @(Install-ProblemDeviceDrivers -CheckOnly:([bool]$Script:CheckOnly))) { Write-PLog $l }
+    if ($Script:CheckOnly -or -not $AllowPack) { return }
+    $left = @(Get-ProblemDevices | Where-Object { $_.Code -in 1, 10, 18, 28, 31, 37, 39, 48, 52 })
+    if (-not $left.Count) { Write-PLog 'Alle Geräte haben jetzt einen funktionierenden Treiber.' 'OK'; return }
+    $mk = ''; try { $mk = [string](Get-CimInstance Win32_ComputerSystem).Manufacturer } catch { }
+    if ($mk -notmatch 'Lenovo|HP|Hewlett|Dell') { Write-PLog ('Noch {0} Gerät(e) ohne passenden Treiber. Für "{1}" gibt es kein automatisches Hersteller-Paket - Treiber bitte beim Hersteller laden (Seite Treiber zeigt die Hardware-ID).' -f $left.Count, $mk) 'WARN'; return }
+    Write-PLog ('Noch {0} Gerät(e) ohne passenden Treiber - lade das Treiberpaket des Herstellers (installiert nur passende, neuere Treiber) ...' -f $left.Count)
+    try { Invoke-OemDriverPack } catch { Write-PLog ('Hersteller-Treiberpaket: ' + $_.Exception.Message) 'WARN' }
+    $left2 = @(Get-ProblemDevices | Where-Object { $_.Code -in 1, 10, 18, 28, 31, 37, 39, 48, 52 })
+    if ($left2.Count) { Write-PLog ('Weiterhin ohne Treiber: {0}. Bitte einmal neu starten und erneut prüfen; sonst den Treiber auf der Herstellerseite suchen.' -f ((@($left2 | ForEach-Object { '{0} (Code {1})' -f $_.Name, $_.Code })) -join ', ')) 'WARN' }
+    else { Write-PLog 'Alle Geräte haben jetzt einen funktionierenden Treiber.' 'OK' }
+}
+
+# ---------------------------------------------------------------- 14.1: Startzeit-Analyse (Ereignisprotokoll Diagnostics-Performance)
+function Get-BootAnalysis([int]$Days = 60) {
+    $since = (Get-Date).AddDays(-$Days)
+    $ev = @(); try { $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-Diagnostics-Performance/Operational'; Id = 100, 101, 102, 103, 106, 109; StartTime = $since } -MaxEvents 3000 -ErrorAction Stop) } catch { }
+    $boots = [System.Collections.Generic.List[object]]::new(); $agg = @{}
+    foreach ($e in $ev) {
+        $d = @{}; try { foreach ($n in ([xml]$e.ToXml()).Event.EventData.Data) { $d[[string]$n.Name] = [string]$n.'#text' } } catch { continue }
+        if ($e.Id -eq 100) { $bt = 0.0; [void][double]::TryParse([string]$d['BootTime'], [ref]$bt); if ($bt -gt 0) { $boots.Add([pscustomobject]@{ Time = $e.TimeCreated; Sec = [math]::Round($bt / 1000, 1); MainSec = [math]::Round(([double]('0' + $d['MainPathBootTime'])) / 1000, 1); PostSec = [math]::Round(([double]('0' + $d['BootPostBootTime'])) / 1000, 1) }) }; continue }
+        $typ = switch ($e.Id) { 101 { 'Programm' } 102 { 'Treiber' } 103 { 'Dienst' } 106 { 'Hintergrund' } 109 { 'Gerät' } }
+        $nm = [string]$d['Name']; $fn = [string]$d['FriendlyName']; if (-not $nm) { $nm = $fn }
+        if (-not $nm) { continue }
+        $deg = 0.0; [void][double]::TryParse([string]$d['DegradationTime'], [ref]$deg)
+        $k = $typ + '|' + $nm.ToLower()
+        if (-not $agg.ContainsKey($k)) { $agg[$k] = [pscustomobject]@{ Typ = $typ; Name = $nm; Display = $(if ($fn) { $fn } else { $nm }); Sum = 0.0; Max = 0.0; Count = 0; Last = $e.TimeCreated } }
+        $a = $agg[$k]; $a.Sum += $deg; $a.Count++; if ($deg -gt $a.Max) { $a.Max = $deg }; if ($e.TimeCreated -gt $a.Last) { $a.Last = $e.TimeCreated }
+    }
+    $svcPath = @{}; try { foreach ($s in @(Get-CimInstance Win32_Service -OperationTimeoutSec 15 -ErrorAction Stop)) { $svcPath[([string]$s.Name).ToLower()] = $s } } catch { }
+    $items = foreach ($a in $agg.Values) {
+        $act = 'nur Info'; $key = ''
+        switch ($a.Typ) {
+            'Programm' { $act = 'Autostart abschalten'; $key = [IO.Path]::GetFileName($a.Name) }
+            'Dienst' {
+                $s = $svcPath[$a.Name.ToLower()]
+                if ($s -and [string]$s.StartMode -eq 'Auto' -and [string]$s.PathName -notmatch '(?i)\\Windows\\(System32|SysWOW64)\\(svchost|lsass|services)\.exe') { $act = 'verzögert starten'; $key = [string]$s.Name }
+                elseif ($s) { $act = 'Windows-Dienst - nicht ändern' }
+            }
+            'Treiber' { $act = 'Treiber aktualisieren (Seite Treiber)' }
+            'Gerät' { $act = 'Treiber aktualisieren (Seite Treiber)' }
+        }
+        [pscustomobject]@{ Typ = $a.Typ; Name = $a.Name; Display = $a.Display; AvgSec = [math]::Round($a.Sum / [math]::Max(1, $a.Count) / 1000, 1); MaxSec = [math]::Round($a.Max / 1000, 1); Count = $a.Count; LastText = $a.Last.ToString('dd.MM.yyyy'); Action = $act; Key = $key; AvgText = ('{0:N1} s' -f ($a.Sum / [math]::Max(1, $a.Count) / 1000)) }
+    }
+    $bl = @($boots | Sort-Object Time -Descending)
+    [pscustomobject]@{
+        Boots = $bl; Items = @($items | Sort-Object AvgSec -Descending | Select-Object -First 60)
+        AvgBoot = $(if ($bl.Count) { [math]::Round((@($bl | Select-Object -First 10 | ForEach-Object { $_.Sec }) | Measure-Object -Average).Average, 0) } else { 0 })
+        LastBoot = $(if ($bl.Count) { $bl[0].Sec } else { 0 })
+    }
+}
+function Set-ServiceDelayedStart([string]$Name) {
+    $r = & sc.exe config $Name start= delayed-auto 2>&1
+    if ($LASTEXITCODE -ne 0) { throw ([string]($r -join ' ')).Trim() }
+}
+
+# ---------------------------------------------------------------- 14.1: Automatisch beheben (nach geplanten Läufen, wenn der Score unter die Grenze fällt)
+function Invoke-AutoFix {
+    $cfg = Read-PflegeConfig
+    if (-not $cfg.AutoFix -or -not [bool]$cfg.AutoFix.Enabled) { return }
+    $below = 85; try { $below = [int]$cfg.AutoFix.Below } catch { }
+    $res = Get-ScHealthScore
+    if ([int]$res.Score -ge $below) { return }
+    $log = [System.Collections.Generic.List[string]]::new(); $hand = [System.Collections.Generic.List[string]]::new()
+    $log.Add(('{0:dd.MM.yyyy HH:mm} Zustands-Score {1} liegt unter {2} - automatische Reparatur' -f (Get-Date), $res.Score, $below))
+    $acts = [System.Collections.Generic.List[string]]::new(); $drv = $false
+    foreach ($p in @($res.Components | Where-Object { [double]$_.Max -gt 0 -and [double]$_.Points -lt [double]$_.Max })) {
+        $why = [string]$p.Reason
+        switch ([string]$p.Key) {
+            'Security' {
+                if ($why -match 'Virendefinitionen veraltet') { $acts.Add('AvSig') }
+                if ($why -match 'Firewall aus') { $hand.Add('Firewall ist aus ("Punkte beheben" schaltet sie ein)') }
+                if ($why -match 'nicht verschlüsselt') { $hand.Add('Laufwerk C: ist nicht verschlüsselt (BitLocker)') }
+                if ($why -match 'Secure Boot aus') { $hand.Add('Secure Boot ist aus (nur im BIOS änderbar)') }
+                if ($why -match 'KEIN Virenschutz') { $hand.Add('Kein Virenschutz aktiv') }
+            }
+            'Devices' { $acts.Add('Devices'); $drv = $true }
+            'Boot' { $hand.Add(('Start dauert lange - "Punkte beheben" bzw. die Startzeit-Analyse (Seite Autostart) helfen')) }
+            'Disk' { $hand.Add('Datenträger: ' + $why) }
+            'Space' { $hand.Add('Wenig Speicherplatz - Aufräumen starten') }
+            'Updates' { if ($why -match 'Neustart ausstehend') { $hand.Add('Neustart ausstehend, damit Updates fertig werden') } }
+        }
+    }
+    if ($acts.Count) { foreach ($l in ((Invoke-ScQuickFixes $acts.ToArray()) -split "`r?`n")) { if ($l) { $log.Add($l) } } }
+    if ($drv) { foreach ($l in @(Install-ProblemDeviceDrivers)) { $log.Add($l) } }
+    if ($hand.Count) { $log.Add('Von Hand: ' + ($hand -join ' · ')) }
+    try { $f = Join-Path (Join-Path $DataDir 'Logs') ('AutoFix_{0:yyyyMMdd_HHmmss}.log' -f (Get-Date)); New-Item (Split-Path $f) -ItemType Directory -Force | Out-Null; [IO.File]::WriteAllLines($f, [string[]]$log, (New-Object Text.UTF8Encoding $true)) } catch { }
+    if ($hand.Count) { try { $null = Send-PflegeNotify ('Zustands-Score {0}: bitte kurz ansehen' -f $res.Score) ('Automatisch erledigt, was ging. Von Hand: ' + ($hand -join '; ')) 'Yellow' } catch { } }
+}
 
 # Schnelle, sichere Reparaturen für "Punkte beheben" (läuft im Hintergrund)
 function Invoke-ScQuickFixes([string[]]$Acts) {
@@ -21577,7 +21711,7 @@ $pageRepair = New-Page 'Fehlersuche und Reparatur' 'Erst suchen, dann gezielt re
         '<Button x:Name="BtnAppxCopy" Content="Protokoll kopieren" Style="{StaticResource Sec}" HorizontalAlignment="Left"/>')) +
     (New-Card 'Geräte mit Problemen (Geräte-Manager)' @(
         '<TextBlock Text="Findet Geräte mit Ausrufezeichen im Geräte-Manager und sagt, was los ist. &quot;Reparieren&quot; entfernt verwaiste Einträge (z.B. ein alter TAP-/VPN-Adapter, dessen Treiber gelöscht wurde) und schaltet Bluetooth-Dienste ohne Treiber (z.B. bei gekoppelten Handys/Tablets unter &quot;Andere Geräte&quot;) für ihr Gerät aus - dann kommen sie nicht wieder." Foreground="#6B7890" FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,8"/>',
-        '<WrapPanel><Button x:Name="BtnDevCheck" Content="Geräte prüfen"/><Button x:Name="BtnDevFix" Content="Geräte-Probleme reparieren" Style="{StaticResource Sec}"/></WrapPanel>',
+        '<WrapPanel><Button x:Name="BtnDevCheck" Content="Geräte prüfen"/><Button x:Name="BtnDevFix" Content="Geräte-Probleme reparieren" Style="{StaticResource Sec}"/><Button x:Name="BtnDevDrivers" Content="Treiber für Problemgeräte suchen" Style="{StaticResource Sec}" ToolTip="Gezielt über Windows Update, sonst über das Treiberpaket des Herstellers (HP, Lenovo, Dell)"/></WrapPanel>',
         '<TextBlock x:Name="DevFixState" Text="" Foreground="#1F2A44" FontWeight="SemiBold" Margin="0,6,0,4" TextWrapping="Wrap"/>',
         '<Border Background="#EDF1F7" BorderBrush="#C7D0DE" BorderThickness="1" CornerRadius="6" Padding="2" Margin="0,0,0,8"><TextBox x:Name="DevFixOut" IsReadOnly="True" FontFamily="Consolas" FontSize="13" Height="220" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap" Background="#EDF1F7" Foreground="#17202E" BorderThickness="0" Padding="8,6"/></Border>',
         '<Button x:Name="BtnDevCopy" Content="Protokoll kopieren" Style="{StaticResource Sec}" HorizontalAlignment="Left"/>')) +
@@ -21715,6 +21849,7 @@ $pageSecurity = New-Page 'Sicherheit' 'Alle Schutzfunktionen dieses PCs auf eine
 
 # ---------------------------------------------------------------- Handbuch (wird mit jeder Version gepflegt)
 $ManualNews = @(
+    'Version 14.1: Treiber für Geräte mit Problem (z.B. Code 48/28) sucht PC-Tools jetzt gezielt - erst über Windows Update, dann über das offizielle Treiberpaket von HP, Lenovo oder Dell (Seite Geräte und "Punkte beheben"). Neu auf der Seite Autostart: Startzeit-Analyse zeigt, welche Programme, Dienste und Treiber den Start wie viele Sekunden bremsen, und entschärft sie mit einem Klick. Beim Zustands-Score: "Automatisch beheben, wenn der Score unter ... fällt" - nach jedem geplanten Lauf wird erledigt, was sicher automatisch geht, der Rest kommt als Hinweis.',
     'Version 14.0.1: Neuer Knopf "Punkte beheben" beim Zustands-Score - behebt mit einem Klick alles, was automatisch geht (Updates und Treiber nachinstallieren, Aufräumen, Autostart aufräumen, Geräte-Probleme, Virendefinitionen, Firewall) und sagt ehrlich, was nur von Hand geht (z.B. Secure Boot im BIOS). Fehlgeschlagene Updates zählen im Score nur noch, wenn sie seitdem nicht doch erfolgreich installiert wurden.',
     'Version 14.0: PC-Tools spricht jetzt 12 Sprachen - Deutsch, English, Español, Français, Italiano, Português (Brasil), Polski, Türkçe, Русский, 简体中文, 日本語 und 한국어. Die Sprache wählst du beim ersten Start oder jederzeit unter Einstellungen > Stabilität > Sprache; auch der KI-Assistent antwortet in deiner Sprache. Die Übersetzungen sind maschinell (KI) erstellt - Fehler bitte über "Übersetzungsfehler melden" mitteilen. Dazu: PC-Tools.exe, Installationsprogramm und die Linux-Ausgabe.',
     'Version 13.9.2: Das Symbol in der Taskleiste ist repariert (eigenes PC-Tools-Symbol in allen Größen, auch beim Anheften). Neu: PC-Tools.exe als Starter und ein Installationsprogramm (PC-Tools-Setup.exe) - und die ersten Sprachen: English, Español, Русский und 简体中文 (Einstellungen > Stabilität > Sprache). Weitere Sprachen folgen mit Version 14.',
@@ -22659,6 +22794,15 @@ $pageTune = @"
           <StackPanel x:Name="AutoList"/>
         </StackPanel>
       </Border>
+      <Border Background="White" CornerRadius="10" Padding="18,12" Margin="0,0,0,14" BorderBrush="#E2E7F0" BorderThickness="1">
+        <StackPanel>
+          <TextBlock Text="Startzeit-Analyse" FontSize="15" FontWeight="SemiBold" Foreground="#1F2A44"/>
+          <TextBlock Text="Windows misst bei jedem Start, welche Programme, Dienste und Treiber ihn bremsen. Hier stehen die größten Bremsen der letzten 60 Tage - Programme lassen sich aus dem Autostart nehmen, Dienste von Drittanbietern verzögert starten." Foreground="#6B7890" FontSize="12" TextWrapping="Wrap" Margin="0,2,0,8"/>
+          <WrapPanel Margin="0,0,0,6"><Button x:Name="BtnBootAnalyze" Content="Startzeit analysieren" Padding="14,7" Margin="0,0,8,8"/><Button x:Name="BtnBootFix" Content="Ausgewählte entschärfen" Style="{StaticResource Sec}" Padding="14,7" Margin="0,0,8,8" IsEnabled="False" ToolTip="Ohne Auswahl: alle Bremsen ab 1 Sekunde, die PC-Tools ändern kann"/></WrapPanel>
+          <TextBlock x:Name="BootSummary" Text="" FontWeight="SemiBold" Foreground="#1F2A44" TextWrapping="Wrap" Margin="0,0,0,6"/>
+          $(New-DataGrid 'BootTimeGrid' @('Art|Typ|95', 'Name|Display|*', 'Ø Verzögerung|AvgText|105|AvgSec', 'Anzahl|Count|65', 'Zuletzt|LastText|90', 'Möglich|Action|210') 'Height="240" IsReadOnly="True" AutoGenerateColumns="False" SelectionMode="Extended"')
+        </StackPanel>
+      </Border>
     </StackPanel>
   </ScrollViewer>
   <Grid Grid.Row="3" Margin="0,12,0,0">
@@ -23279,6 +23423,7 @@ $pageScoreCard = @'
       <StackPanel Orientation="Horizontal" VerticalAlignment="Center"><Border Width="4" Height="16" CornerRadius="2" Margin="0,0,10,0" VerticalAlignment="Center" Background="{StaticResource AccentGrad}"/><TextBlock Text="Zustands-Score" FontSize="16" FontWeight="SemiBold" Foreground="#1F2A44" VerticalAlignment="Center"/><TextBlock x:Name="ScInfo" Text="" FontSize="12" Foreground="#6B7890" Margin="12,0,0,0" VerticalAlignment="Center"/></StackPanel>
       <StackPanel Grid.Column="1" Orientation="Horizontal"><Button x:Name="BtnScFix" Content="Punkte beheben" Padding="12,5" Margin="0,0,8,0" VerticalAlignment="Center" ToolTip="Behebt mit einem Klick alles, was sich automatisch beheben lässt (vorher kommt eine Übersicht)"/><Button x:Name="BtnScHistory" Content="Verlauf" Style="{StaticResource Sec}" Padding="12,5" Margin="0,0,8,0" VerticalAlignment="Center"/><Button x:Name="BtnScRefresh" Content="Neu berechnen" Style="{StaticResource Sec}" Padding="12,5" Margin="0" VerticalAlignment="Center"/></StackPanel>
     </Grid>
+    <WrapPanel Margin="0,0,0,10"><CheckBox x:Name="AutoFix_Enabled" Content="Automatisch beheben, wenn der Score unter" VerticalAlignment="Center" Margin="0,0,6,0" ToolTip="Nach jedem geplanten Pflegelauf: Virendefinitionen, Geräte-Probleme und Treiber für Problemgeräte werden selbst behoben. Alles andere meldet PC-Tools als Hinweis."/><TextBox x:Name="AutoFix_Below" Width="40" TextAlignment="Center" Padding="2,2" VerticalAlignment="Center"/><TextBlock Text="fällt (nach jedem geplanten Lauf)" VerticalAlignment="Center" Foreground="#6B7890" Margin="6,0,0,0"/></WrapPanel>
     <Grid>
       <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="260"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
       <Grid Width="170" Height="170" Margin="0,0,24,0" VerticalAlignment="Top">
@@ -35895,10 +36040,10 @@ function Start-ScFixAll {
             }
             'Updates' { if (-not $run.Contains('Update')) { $run.Add('Update'); $plan.Add('Windows-, Treiber- und Programm-Updates installieren (fehlgeschlagene Updates werden erneut versucht)') } }
             'Space' { $run.Add('Clean'); $plan.Add('Aufräumen (temporäre Dateien, Caches, Papierkorb)') }
-            'Boot' { $autoMin = $true; $plan.Add('Autostart aufräumen: überflüssige Programme beim Start abschalten (schnellerer Start; jederzeit rückgängig auf der Seite Autostart)') }
+            'Boot' { $autoMin = $true; $plan.Add('Startzeit-Analyse: Programme, die den Start messbar bremsen, aus dem Autostart nehmen und Drittanbieter-Dienste verzögert starten'); $plan.Add('Autostart aufräumen: überflüssige Programme beim Start abschalten (schnellerer Start; jederzeit rückgängig auf der Seite Autostart)') }
             'Devices' {
                 $acts.Add('Devices'); $plan.Add('Geräte-Probleme reparieren und Geräte neu erkennen')
-                if (-not $run.Contains('Update')) { $run.Add('Update'); $plan.Add('Treiber-Updates suchen und installieren (für Geräte ohne passenden Treiber)') }
+                $run.Add('ProblemDrivers'); $plan.Add('Treiber für die betroffenen Geräte suchen: gezielt über Windows Update, sonst über das Treiberpaket des Herstellers (HP/Lenovo/Dell)')
                 if ($why -match 'Code 48|Code 28|Code 10') { $hand.Add('Bleibt ein Gerät mit Code 48/28 übrig, braucht es einen neueren Treiber vom Hersteller (Seite "Treiber" > Hersteller-Tool).') }
             }
             'Disk' { $hand.Add('Datenträger: Verschleiß oder Lesefehler lassen sich nicht reparieren - bitte Daten sichern (Seite "Datensicherung").') }
@@ -35916,7 +36061,10 @@ function Start-ScFixAll {
     $ui.BtnScFix.IsEnabled = $false
     $ui.ScInfo.Text = 'Punkte werden behoben ...'
     try { $null = Invoke-UiWait { Checkpoint-Computer -Description 'PC-Tools: Punkte beheben' -RestorePointType MODIFY_SETTINGS -ErrorAction SilentlyContinue } @() @() 180 'Wiederherstellungspunkt wird erstellt ...' } catch { }
-    if ($autoMin) { try { $null = Set-AutoBulk 'Recommended' -NoConfirm } catch { } }
+    if ($autoMin) {
+        try { $null = Set-AutoBulk 'Recommended' -NoConfirm } catch { }
+        try { $ba = @(Invoke-UiWait { Get-BootAnalysis 60 } @() @('Get-BootAnalysis') 120 'Startzeit wird analysiert ...') | Where-Object { $_ -and $_.PSObject.Properties['Items'] } | Select-Object -First 1; if ($ba) { $null = Invoke-BootFix @($ba.Items | Where-Object { $_.AvgSec -ge 1 }) -NoConfirm } } catch { }
+    }
     if ($bitlocker) { try { Start-Process 'control.exe' '/name Microsoft.BitLockerDriveEncryption' } catch { try { Start-Process 'ms-settings:deviceencryption' } catch { } } }
     $script:ScFixRun = @($run)
     if ($acts.Count) {
@@ -35933,6 +36081,65 @@ function Start-ScFixAll {
     }
 }
 $ui.BtnScFix.Add_Click({ try { Start-ScFixAll } catch { $ui.BtnScFix.IsEnabled = $true; Show-UiError ('Punkte beheben: ' + $_.Exception.Message) } })
+function Save-AutoFixSetting {
+    try {
+        $c = Read-PflegeConfig
+        $b = 85; $n = 0; if ([int]::TryParse((([string]$ui.AutoFix_Below.Text) -replace '[^\d]', ''), [ref]$n) -and $n -ge 10 -and $n -le 100) { $b = $n }
+        $ui.AutoFix_Below.Text = [string]$b
+        $c.AutoFix | Add-Member -NotePropertyName Enabled -NotePropertyValue ([bool]$ui.AutoFix_Enabled.IsChecked) -Force
+        $c.AutoFix | Add-Member -NotePropertyName Below -NotePropertyValue $b -Force
+        Save-PflegeConfig $c
+        $ui.StatusText.Text = $(if ($ui.AutoFix_Enabled.IsChecked) { ('Automatisches Beheben ist an (unter {0} Punkten, nach geplanten Läufen).' -f $b) } else { 'Automatisches Beheben ist aus.' })
+    } catch { }
+}
+$ui.AutoFix_Enabled.Add_Click({ Save-AutoFixSetting })
+$ui.AutoFix_Below.Add_LostFocus({ Save-AutoFixSetting })
+# ---- Startzeit-Analyse (Seite Autostart)
+$script:BootRes = $null
+function Start-BootAnalysis {
+    $ui.BtnBootAnalyze.IsEnabled = $false; $ui.BootSummary.Text = 'Werte das Start-Protokoll von Windows aus ...'
+    Invoke-Bg -Script { Get-BootAnalysis 60 } -Functions @('Get-BootAnalysis') -Done {
+        param($r, $e)
+        $ui.BtnBootAnalyze.IsEnabled = $true
+        $x = @($r | Where-Object { $_ -and $_.PSObject.Properties['Items'] })[0]
+        if ($e -or -not $x) { $ui.BootSummary.Text = 'Auswertung nicht möglich: ' + $(if ($e) { $e.Message } else { 'keine Daten' }); return }
+        $script:BootRes = $x
+        Set-GridItems $ui.BootTimeGrid @($x.Items)
+        $ui.BtnBootFix.IsEnabled = [bool]@($x.Items | Where-Object { $_.Action -in 'Autostart abschalten', 'verzögert starten' }).Count
+        $ui.BootSummary.Text = $(if (@($x.Boots).Count) { 'Letzter Start: {0:N0} s · Ø der letzten {1} Starts: {2:N0} s · {3} Bremsen gefunden (Windows misst nur, was den Start spürbar verzögert)' -f $x.LastBoot, [math]::Min(10, @($x.Boots).Count), $x.AvgBoot, @($x.Items).Count } else { 'Windows hat noch keine Startzeiten aufgezeichnet (Protokoll "Diagnostics-Performance" leer oder ausgeschaltet).' })
+    }
+}
+function Invoke-BootFix([object[]]$Rows, [switch]$NoConfirm) {
+    $rows = @($Rows | Where-Object { $_ -and $_.Action -in 'Autostart abschalten', 'verzögert starten' })
+    if (-not $rows.Count) { if (-not $NoConfirm) { Show-UiError 'In der Auswahl ist nichts, was PC-Tools ändern kann (Treiber und Windows-Dienste werden nicht angefasst).' }; return 0 }
+    if (-not $NoConfirm -and -not (Confirm-Ui (("Diese Startbremsen entschärfen?`n`n- " + ((@($rows | ForEach-Object { '{0} ({1}, Ø {2})' -f $_.Display, $_.Action, $_.AvgText })) -join "`n- ")) + "`n`nProgramme starten dann nicht mehr automatisch (jederzeit wieder einschaltbar), Dienste starten etwas später nach der Anmeldung."))) { return 0 }
+    if (-not @($script:AutoEntries).Count) { try { Build-Autostart } catch { } }
+    $n = 0; $err = @()
+    foreach ($r in $rows) {
+        try {
+            if ($r.Action -eq 'verzögert starten') { Set-ServiceDelayedStart $r.Key; $n++; continue }
+            $fn = ([string]$r.Key).ToLower()
+            $hit = @($script:AutoEntries | Where-Object { $_ -and $_.Enabled -and -not $_.Keep -and ([string]$_.Cmd).ToLower().Contains($fn) })
+            if (-not $hit.Count) { $err += ('{0}: kein Autostart-Eintrag gefunden (startet evtl. über einen Dienst)' -f $r.Display); continue }
+            foreach ($h in $hit) { Set-AutostartEntry $h $false; $n++ }
+        } catch { $err += ('{0}: {1}' -f $r.Display, $_.Exception.Message) }
+    }
+    try { Show-Autostart } catch { }
+    $ui.StatusText.Text = ('Startzeit: {0} Bremse(n) entschärft.' -f $n)
+    if ($err -and -not $NoConfirm) { Show-UiError ("Nicht alles ging:`n" + ($err -join "`n")) }
+    return $n
+}
+$ui.BtnBootAnalyze.Add_Click({ Start-BootAnalysis })
+$ui.BtnBootFix.Add_Click({
+    $sel = @($ui.BootTimeGrid.SelectedItems)
+    if (-not $sel.Count) { $sel = @($script:BootRes.Items | Where-Object { $_.AvgSec -ge 1 }) }
+    try { $null = Invoke-BootFix $sel } catch { Show-UiError $_.Exception.Message }
+})
+$ui.BtnDevDrivers.Add_Click({
+    if ($script:Job) { Show-UiError 'Es läuft bereits eine Aufgabe - bitte warten.'; return }
+    if (-not (Confirm-Ui "Treiber für alle Geräte mit Problem suchen und installieren?`n`nZuerst gezielt über Windows Update. Hilft das nicht, lädt PC-Tools bei HP, Lenovo und Dell das offizielle Treiberpaket des Herstellers (kann 1-3 GB groß sein) und installiert daraus nur passende, neuere Treiber. Vorher wird der Treiberstand gesichert.")) { return }
+    $null = Start-Run -Parts @('ProblemDrivers')
+})
 $ui.ScSpark.Add_SizeChanged({ param($s, $e) if ($e.WidthChanged -and $script:ScSparkRows) { try { Update-ScSpark @($script:ScSparkRows) } catch { } } })
 try { Show-ScCached } catch { }
 $window.Add_Loaded({
