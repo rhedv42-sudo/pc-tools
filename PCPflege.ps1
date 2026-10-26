@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Auto, [switch]$Run, [string]$Parts = '', [switch]$Analyze, [switch]$CheckOnly, [string]$RunId = '', [string]$AppsFile = '', [string]$WingetFile = '', [string]$DirectFile = '', [string]$Monitor = '', [switch]$DeskArrange, [string]$Topology = '', [int]$Delay = 0, [switch]$Silent, [switch]$Install, [string]$JobFile = '', [switch]$Backup, [switch]$FleetPoll, [string]$FirstLogon = '', [switch]$NetDiag, [switch]$TbSync, [switch]$WinRepair, [switch]$NetDeep, [string]$DeepOpts = '', [switch]$FullBackup, [switch]$FullRepair, [switch]$NetDoc, [switch]$Sign, [string]$SignOpts = '', [string]$ChocoFile = '')
 
-$AppVersion = '14.3.3'
+$AppVersion = '14.3.4'
 $DefaultUpdateSource = 'github:rhedv42-sudo/pc-tools@stable'
 # Portabel (USB-Stick): Datei portable.txt neben dem Skript -> Einstellungen/Protokolle im Ordner Daten auf dem Stick
 $Script:IsPortable = [bool]($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'portable.txt')))
@@ -22018,6 +22018,7 @@ $pageSecurity = New-Page 'Sicherheit' 'Alle Schutzfunktionen dieses PCs auf eine
 
 # ---------------------------------------------------------------- Handbuch (wird mit jeder Version gepflegt)
 $ManualNews = @(
+    'Version 14.3.4: Ändert PC-Tools im BIOS Secure Boot, TPM oder den Startmodus, wird BitLocker vorher automatisch für 2 Neustarts ausgesetzt - so fragt Windows danach nicht mehr nach dem Wiederherstellungsschlüssel. Der Hinweis bei "Punkte beheben" zu Secure Boot erklärt das jetzt auch für Änderungen direkt im BIOS-Menü.',
     'Version 14.3.3: Updates kommen jetzt auch ohne bzw. mit einem alten GitHub-Token an (öffentliches Repository). KI mit Ollama: Ist das gewählte Modell nicht geladen, nimmt PC-Tools automatisch ein vorhandenes oder lädt es selbst.',
     'Version 14.3.2: Port-Scanner und Sicherheits-Scan prüfen nur noch Adressen im eigenen Netz (z.B. 192.168.x.x, 10.x.x.x) - fremde Adressen im Internet werden nie gescannt. Das Setup zeigt vor der Installation die Datenschutz-Hinweise.',
     'Version 14.3.1: Alle neuen Funktionen seit 14.0 (KI-Assistent, Punkte beheben, Startzeit-Analyse, Hilfe holen, Einfach-Modus, Passwort-Check, BitLocker-Assistent) sind jetzt in allen 12 Sprachen übersetzt.',
@@ -28320,10 +28321,11 @@ function Save-CuBios {
     $chg = @(); foreach ($o in $ui.CuBiosList.Children) { $cb = $o.Children[1]; if ([string]$cb.SelectedItem -ne [string]$cb.Tag.Current) { $chg += [pscustomobject]@{ Vendor = $cb.Tag.Vendor; Name = $cb.Tag.Name; Value = [string]$cb.SelectedItem } } }
     if (-not $chg.Count) { $ui.StatusText.Text = 'Keine BIOS-Einstellung geändert.'; return }
     if (-not (Confirm-Ui ("Diese BIOS-Einstellungen ändern?`n`n{0}`n`nWirkt nach dem nächsten Neustart." -f (($chg | ForEach-Object { '  {0} = {1}' -f $_.Name, $_.Value }) -join "`n")) 'Warning')) { return }
+    $blMsg = Suspend-BlForBios $chg
     $res = Set-OemBiosSettings $chg $ui.CuBiosPwd.Password
     $bad = @($res | Where-Object { -not $_.Ok })
     if ($bad.Count) { Show-UiError ("Nicht übernommen:`n" + (($bad | ForEach-Object { '  {0}: {1}' -f $_.Name, $_.Msg }) -join "`n") + "`n`nIst ein BIOS-Kennwort gesetzt? Dann oben eintragen.") }
-    else { $ui.StatusText.Text = '{0} BIOS-Einstellung(en) gespeichert - wirken nach dem Neustart.' -f $chg.Count }
+    else { $ui.StatusText.Text = ('{0} BIOS-Einstellung(en) gespeichert - wirken nach dem Neustart.' -f $chg.Count) + $blMsg }
     Update-CuBios
 }
 
@@ -31805,6 +31807,17 @@ function Update-BiosPendingInfo {
     $ui.BiosPendingInfo.Text = if ($n) { '{0} Änderung(en) vorgemerkt: {1}' -f $n, (($script:BiosPending.GetEnumerator() | Sort-Object Name | ForEach-Object { '{0} = {1}' -f $_.Name, $_.Value }) -join '  ·  ') } else { '{0} BIOS-Einstellungen gelesen - keine Änderungen vorgemerkt.' -f @($script:BiosRows).Count }
     $ui.BtnBiosApplyAll.IsEnabled = [bool]$n
 }
+# BIOS-Änderungen an Secure Boot/TPM/Startmodus ändern die TPM-Messwerte -> BitLocker vorher für 2 Neustarts aussetzen (sonst Abfrage des Wiederherstellungsschlüssels)
+function Suspend-BlForBios($Changes) {
+    $risky = @(@($Changes) | Where-Object { $_ -and [string]$_.Name -match '(?i)secure.?boot|tpm|security.?chip|ptt|boot.?mode|legacy|csm|uefi|sata|raid|ahci|storage|virtuali|vt-?d|txt|device.?guard' })
+    if (-not $risky.Count) { return '' }
+    try {
+        $v = Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction Stop
+        if ([string]$v.ProtectionStatus -ne 'On') { return '' }
+        $null = Suspend-BitLocker -MountPoint $env:SystemDrive -RebootCount 2 -ErrorAction Stop
+        return ' BitLocker ist für die nächsten 2 Neustarts ausgesetzt, damit Windows nicht nach dem Wiederherstellungsschlüssel fragt - danach schaltet er sich selbst wieder ein.'
+    } catch { return (' ACHTUNG: BitLocker konnte nicht ausgesetzt werden (' + $_.Exception.Message + ') - Wiederherstellungsschlüssel bereithalten!') }
+}
 function Invoke-BiosApply {
     if (-not $script:BiosPending.Count) { return }
     $vendor = $script:BiosInfoData.Vendor
@@ -31813,12 +31826,14 @@ function Invoke-BiosApply {
     $q = "Diese BIOS-Einstellungen ändern?`n`n{0}`n`nWirkt nach dem nächsten Neustart." -f (($chg | ForEach-Object { '  {0}: {1} -> {2}' -f $_.Name, (@($script:BiosRows | Where-Object Name -eq $_.Name)[0].Current), $_.Value }) -join "`n")
     if ($risky.Count) { $q += "`n`nACHTUNG: Secure Boot/TPM/Startmodus/Laufwerksmodus betroffen. Ist BitLocker an, fragt Windows danach evtl. den Wiederherstellungsschlüssel ab. Falscher Laufwerksmodus (SATA/RAID) kann den Start verhindern." }
     if (-not (Confirm-Ui $q 'Warning')) { return }
+    $blMsg = Suspend-BlForBios $chg
     $res = @(Set-OemBiosSettings $chg $ui.BiosPwd.Password)
     $ok = @($res | Where-Object Ok); $bad = @($res | Where-Object { -not $_.Ok })
     foreach ($o in $ok) { [void]$script:BiosPending.Remove($o.Name) }
     try { Add-Content -LiteralPath (Join-Path $DataDir 'BIOS-Aenderungen.log') -Value (($res | ForEach-Object { '{0:yyyy-MM-dd HH:mm}  {1} = {2}  {3}' -f (Get-Date), $_.Name, $_.Value, $(if ($_.Ok) { 'OK' } else { 'FEHLER ' + $_.Msg }) }) -join "`r`n") -Encoding UTF8 } catch { }
     if ($bad.Count) { Show-UiError ("{0} übernommen, {1} nicht:`n{2}`n`nAccess Denied / 6 = BIOS-Kennwort nötig oder falsch. Invalid Parameter / 2 = Wert passt nicht. Not Supported = bei diesem Modell nicht änderbar." -f $ok.Count, $bad.Count, (($bad | ForEach-Object { '  {0}: {1}' -f $_.Name, $_.Msg }) -join "`n")) }
-    else { $ui.StatusText.Text = '{0} BIOS-Einstellung(en) gespeichert - aktiv nach dem nächsten Neustart.' -f $ok.Count }
+    else { $ui.StatusText.Text = ('{0} BIOS-Einstellung(en) gespeichert - aktiv nach dem nächsten Neustart.' -f $ok.Count) + $blMsg }
+    if ($blMsg) { [Windows.MessageBox]::Show((T $blMsg.Trim()), (T 'PC-Tools'), 'OK', 'Information') | Out-Null }
     $ui.BiosPwd.Password = ''
     if ($ok.Count -and $ui.BiosRebootAfter.IsChecked -and (Confirm-Ui 'Jetzt neu starten und das BIOS öffnen? Offene Dateien vorher speichern.')) { & shutdown.exe /r /fw /t 5 | Out-Null; return }
     Update-BiosSettings
@@ -36235,7 +36250,7 @@ function Start-ScFixAll {
                 if ($why -match 'Virendefinitionen veraltet') { $acts.Add('AvSig'); $plan.Add('Virendefinitionen aktualisieren') }
                 if ($why -match 'Firewall aus') { $acts.Add('Firewall'); $plan.Add('Firewall wieder einschalten') }
                 if ($why -match 'nicht verschlüsselt') { $bitlocker = $true; $plan.Add('BitLocker-Assistent öffnen: prüfen, verschlüsseln und den Wiederherstellungsschlüssel an mehreren Orten sichern') }
-                if ($why -match 'Secure Boot aus') { $hand.Add('Secure Boot lässt sich nur im BIOS/UEFI des PCs einschalten (Seite "BIOS"). Vorher prüfen, dass Windows im UEFI-Modus installiert ist - sonst startet der PC danach nicht.') }
+                if ($why -match 'Secure Boot aus') { $hand.Add('Secure Boot lässt sich nur im BIOS/UEFI des PCs einschalten (Seite "BIOS" - dort setzt PC-Tools BitLocker vorher automatisch aus). Wer es direkt im BIOS-Menü einschaltet: VORHER auf der Seite Sicherheit bei BitLocker "Für 1 Neustart aussetzen" klicken, sonst fragt Windows danach den Wiederherstellungsschlüssel ab. Außerdem prüfen, dass Windows im UEFI-Modus installiert ist - sonst startet der PC danach nicht.') }
                 if ($why -match 'KEIN Virenschutz') { $hand.Add('Kein Virenschutz aktiv: Seite "Sicherheit" öffnen und Microsoft Defender einschalten.') }
             }
             'Updates' { if (-not $run.Contains('Update')) { $run.Add('Update'); $plan.Add('Windows-, Treiber- und Programm-Updates installieren (fehlgeschlagene Updates werden erneut versucht)') } }
@@ -43259,7 +43274,7 @@ function Get-BlWizChecks {
     $tpm = $null; try { $tpm = Get-Tpm -ErrorAction Stop } catch { }
     if ($tpm -and $tpm.TpmReady) { & $add $true 'TPM-Chip' 'bereit - der PC entsperrt sich beim Start automatisch' } else { & $add $false 'TPM-Chip' 'nicht bereit - im BIOS/UEFI einschalten (oft "Security Chip", "PTT" oder "fTPM"), Seite BIOS-Einstellungen' }
     $sb = $null; try { $sb = Confirm-SecureBootUEFI -ErrorAction Stop } catch { }
-    if ($sb -eq $true) { & $add $true 'Secure Boot' 'an' } elseif ($sb -eq $false) { & $add $null 'Secure Boot' 'aus - BitLocker geht trotzdem, empfohlen ist es an' } else { & $add $null 'Secure Boot' 'nicht prüfbar (älteres BIOS-Startverfahren?)' }
+    if ($sb -eq $true) { & $add $true 'Secure Boot' 'an' } elseif ($sb -eq $false) { & $add $null 'Secure Boot' 'aus - am besten JETZT vor dem Verschlüsseln im BIOS einschalten (sonst später BitLocker vorher kurz aussetzen, sonst fragt Windows nach dem Schlüssel)' } else { & $add $null 'Secure Boot' 'nicht prüfbar (älteres BIOS-Startverfahren?)' }
     $bat = @(Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue)
     if ($bat.Count) { $ac = @($bat | Where-Object { [int]$_.BatteryStatus -in 2, 6, 7, 8, 9 }).Count; if ($ac) { & $add $true 'Stromversorgung' 'Netzteil angeschlossen' } else { & $add $null 'Stromversorgung' 'Akku-Betrieb - für die erste Verschlüsselung bitte das Netzteil anschließen' } }
     $state = 'unbekannt'; $on = $false; $pct = 0
