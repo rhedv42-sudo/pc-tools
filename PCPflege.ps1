@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Auto, [switch]$Run, [string]$Parts = '', [switch]$Analyze, [switch]$CheckOnly, [string]$RunId = '', [string]$AppsFile = '', [string]$WingetFile = '', [string]$DirectFile = '', [string]$Monitor = '', [switch]$DeskArrange, [string]$Topology = '', [int]$Delay = 0, [switch]$Silent, [switch]$Install, [string]$JobFile = '', [switch]$Backup, [switch]$FleetPoll, [string]$FirstLogon = '', [switch]$NetDiag, [switch]$TbSync, [switch]$WinRepair, [switch]$NetDeep, [string]$DeepOpts = '', [switch]$FullBackup, [switch]$FullRepair, [switch]$NetDoc, [switch]$Sign, [string]$SignOpts = '', [string]$ChocoFile = '')
 
-$AppVersion = '14.3.4'
+$AppVersion = '14.4'
 $DefaultUpdateSource = 'github:rhedv42-sudo/pc-tools@stable'
 # Portabel (USB-Stick): Datei portable.txt neben dem Skript -> Einstellungen/Protokolle im Ordner Daten auf dem Stick
 $Script:IsPortable = [bool]($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'portable.txt')))
@@ -4162,6 +4162,80 @@ function Invoke-DefenderScan {
     }
 }
 
+# ---- BitLocker-Schutzzustand (14.4): ausgesetzt, nur Wiederherstellungsschlüssel, Passwort statt TPM, BIOS-Beobachtung
+function Get-BlUnlockState([string]$Mp = $env:SystemDrive) {
+    $v = Get-BitLockerVolume -MountPoint $Mp -ErrorAction Stop
+    $kp = @($v.KeyProtector | ForEach-Object { [string]$_.KeyProtectorType })
+    $sc = -1
+    if ([string]$v.ProtectionStatus -ne 'On') { try { $sc = [int](Get-CimInstance -Namespace 'root/CIMV2/Security/MicrosoftVolumeEncryption' -ClassName Win32_EncryptableVolume -Filter ("DriveLetter='{0}'" -f $Mp.TrimEnd('\')) -ErrorAction Stop | Invoke-CimMethod -MethodName GetSuspendCount -ErrorAction Stop).SuspendCount } catch { } }
+    [pscustomobject]@{
+        Volume = $v; Encrypted = ([string]$v.VolumeStatus -ne 'FullyDecrypted'); On = ([string]$v.ProtectionStatus -eq 'On'); Protectors = $kp
+        HasTpm = [bool]@($kp | Where-Object { $_ -like 'Tpm*' }).Count; HasPassword = ($kp -contains 'Password')
+        HasUnlock = [bool]@($kp | Where-Object { $_ -like 'Tpm*' -or $_ -in 'Password', 'ExternalKey' }).Count; SuspendCount = $sc
+    }
+}
+function Get-BlFallbackFile { Join-Path $DataDir 'BitLocker-TPM-Ausweich.json' }
+function Read-BlFallback { $f = Get-BlFallbackFile; if (Test-Path -LiteralPath $f) { try { return (Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { } }; return $null }
+function Save-BlFallback($O) { try { $O | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Get-BlFallbackFile) -Encoding UTF8 } catch { } }
+function Get-BiosVersionText { try { return ([string](Get-CimInstance Win32_BIOS -ErrorAction Stop).SMBIOSBIOSVersion).Trim() } catch { return '' } }
+function ConvertTo-BiosVersionNumber([string]$T) {
+    if ($T -match '\((\d+)\.(\d+)\s*\)') { return [version]('{0}.{1}' -f [int]$Matches[1], [int]$Matches[2]) }
+    if ($T -match '^\s*(\d+)\.(\d+)') { return [version]('{0}.{1}' -f [int]$Matches[1], [int]$Matches[2]) }
+    if ($T -match '^\s*(\d{2})(\d{2})\s*$') { return [version]('{0}.{1}' -f [int]$Matches[1], [int]$Matches[2]) }
+    return $null
+}
+# Neuestes BIOS laut Lenovo-Updatekatalog (wie Lenovo System Update); andere Hersteller: $null
+function Get-LenovoBiosLatest {
+    $cs = Get-CimInstance Win32_ComputerSystem
+    if ([string]$cs.Manufacturer -notmatch 'Lenovo') { return $null }
+    $mt = ([string]$cs.Model).Substring(0, [math]::Min(4, ([string]$cs.Model).Length)).ToUpper()
+    $cat = $null
+    foreach ($os in 'Win11', 'Win10') { try { $cat = Get-WebXml ('https://download.lenovo.com/catalog/{0}_{1}.xml' -f $mt, $os); if ($cat) { break } } catch { } }
+    if (-not $cat) { return $null }
+    $best = $null
+    foreach ($pk in @($cat.SelectNodes('//package') | Where-Object { ([string]$_.category) -match 'BIOS' })) {
+        $loc = [string]$pk.location; if (-not $loc) { $loc = [string]$pk.SelectSingleNode('location').InnerText }
+        if (-not $loc) { continue }
+        try { $d = Get-WebXml $loc } catch { continue }
+        $root = $d.DocumentElement; if (-not $root) { continue }
+        $title = [string]($root.SelectSingleNode('Title/Desc')).InnerText
+        if ($title -and $title -notmatch 'BIOS') { continue }
+        if ($title -match 'ECP|Embedded Controller|Thunderbolt|Management Engine|ME Firmware') { continue }
+        $vn = ConvertTo-BiosVersionNumber ([string]$root.GetAttribute('version'))
+        if (-not $vn) { continue }
+        if (-not $best -or $vn -gt $best.Version) { $best = [pscustomobject]@{ Version = $vn; Title = $title; Date = [string]($root.SelectSingleNode('ReleaseDate')).InnerText; Url = $loc } }
+    }
+    return $best
+}
+# Nach Läufen (max. 1x am Tag): Läuft BitLocker mit Start-Passwort, weil der TPM-Schutz am BIOS scheiterte? Dann auf neues BIOS achten und Bescheid geben.
+function Test-BlBiosUpdate([switch]$Force) {
+    $st = $null; try { $st = Get-BlUnlockState } catch { return }
+    if (-not $st.Encrypted -or $st.HasTpm -or -not $st.HasPassword) { return }
+    $fb = Read-BlFallback
+    $cur = Get-BiosVersionText
+    if (-not $fb) { $fb = [pscustomobject]@{ Bios = $cur; Date = (Get-Date).ToString('o'); Latest = ''; Notified = ''; Checked = '' } }
+    if (-not $Force -and [string]$fb.Checked) { try { if (((Get-Date) - [datetime]$fb.Checked).TotalHours -lt 20) { return } } catch { } }
+    $fb | Add-Member -NotePropertyName Checked -NotePropertyValue ((Get-Date).ToString('o')) -Force
+    $curN = ConvertTo-BiosVersionNumber $cur
+    $msg = ''
+    if ([string]$fb.Bios -and $cur -and [string]$fb.Bios -ne $cur) {
+        $msg = ('Das BIOS wurde aktualisiert ({0} -> {1}). Jetzt im BitLocker-Assistenten (Seite Sicherheit) den TPM-Schutz erneut versuchen - klappt es, entfällt das Start-Passwort.' -f $fb.Bios, $cur)
+        $key = 'changed:' + $cur
+    } else {
+        $lt = $null; try { $lt = Get-LenovoBiosLatest } catch { }
+        if ($lt -and $curN -and $lt.Version -gt $curN) {
+            $fb | Add-Member -NotePropertyName Latest -NotePropertyValue ([string]$lt.Version) -Force
+            $msg = ('Lenovo hat ein neues BIOS {0} veröffentlicht (installiert: {1}). Nach dem Update kann BitLocker evtl. wieder den TPM-Chip nutzen - dann entfällt das Start-Passwort. Installieren über Lenovo Vantage / System Update oder die Lenovo-Supportseite.' -f $lt.Version, $curN)
+            $key = 'latest:' + [string]$lt.Version
+        }
+    }
+    if ($msg -and [string]$fb.Notified -ne $key) {
+        try { $null = Send-PflegeNotify 'BitLocker: TPM-Schutz erneut versuchen' $msg 'Yellow' -Force } catch { }
+        $fb | Add-Member -NotePropertyName Notified -NotePropertyValue $key -Force
+        try { Write-PLog $msg 'WARN' } catch { }
+    }
+    Save-BlFallback $fb
+}
 # ---- Zustand (Ampel), Meine PCs, Benachrichtigungen, Verlauf, Vorher/Nachher (Oberfläche und Hintergrund)
 function Get-HealthItems($a) {
     $r = [System.Collections.Generic.List[object]]::new()
@@ -4202,6 +4276,21 @@ function Get-HealthItems($a) {
     try { $des = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryStaticData -ErrorAction Stop)[0].DesignedCapacity; $full = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryFullChargedCapacity -ErrorAction Stop)[0].FullChargedCapacity
           if ($des -and $full -and ($full * 100 / $des) -lt 60) { A 'Yellow' ('Akku nur noch {0:N0} % der Originalkapazität' -f ($full * 100 / $des)) 'Akkutausch einplanen.' 'Health' 'Gerätezustand' } } catch { }
     if ($a.Warranty) { try { $we = [datetime]$a.Warranty; $dd = ($we - (Get-Date)).TotalDays; if ($dd -gt 0 -and $dd -lt 60) { A 'Yellow' ('Garantie endet am {0:dd.MM.yyyy}' -f $we) 'Mängel jetzt noch kostenlos reparieren lassen (Akku, Tasten, Display, Lüfter).' 'Bios' 'Garantie' } } catch { } }
+    # BitLocker: ausgesetzt / nur Wiederherstellungsschlüssel / Passwort statt TPM (14.4)
+    try {
+        $bst = Get-BlUnlockState
+        if ($bst.Encrypted -and $bst.Protectors.Count) {
+            if ($bst.On -and -not $bst.HasUnlock) { A 'Red' 'BitLocker fragt beim nächsten Start nach dem Wiederherstellungsschlüssel' 'Es gibt weder TPM- noch Passwort-Schutz, nur den 48-stelligen Schlüssel. Der BitLocker-Assistent (Seite Sicherheit) richtet den Schutz neu ein.' 'Security' 'Sicherheit' }
+            elseif (-not $bst.On -and $bst.SuspendCount -gt 0) { A 'Yellow' ('BitLocker für {0} Neustart(s) ausgesetzt' -f $bst.SuspendCount) 'Z.B. für ein BIOS-Update. Danach schaltet sich der Schutz von selbst wieder ein.' 'Security' 'Sicherheit' }
+            elseif (-not $bst.On) { A 'Red' 'BitLocker ist ausgesetzt - Daten nicht geschützt' 'Das Laufwerk ist verschlüsselt, aber der Schlüssel liegt offen auf der Platte. Der BitLocker-Assistent (Seite Sicherheit) schaltet den Schutz wieder ein.' 'Security' 'Sicherheit' }
+            if ($bst.HasPassword -and -not $bst.HasTpm) {
+                $bfb = Read-BlFallback; $bcur = Get-BiosVersionText
+                if (-not $bfb) { Save-BlFallback ([pscustomobject]@{ Bios = $bcur; Date = (Get-Date).ToString('o'); Latest = ''; Notified = ''; Checked = '' }) }
+                elseif ([string]$bfb.Bios -and $bcur -and [string]$bfb.Bios -ne $bcur) { A 'Yellow' 'BIOS aktualisiert - BitLocker-TPM-Schutz erneut versuchen' ('BitLocker nutzt ein Start-Passwort, weil der TPM-Schutz mit BIOS {0} nicht ging. Mit dem neuen BIOS {1} klappt es vielleicht - BitLocker-Assistent auf der Seite Sicherheit öffnen.' -f $bfb.Bios, $bcur) 'Security' 'Sicherheit' }
+                elseif ([string]$bfb.Latest) { $bln = $null; try { $bln = [version][string]$bfb.Latest } catch { }; $bcn = ConvertTo-BiosVersionNumber $bcur; if ($bln -and $bcn -and $bln -gt $bcn) { A 'Yellow' ('Neues BIOS {0} verfügbar' -f $bfb.Latest) 'Danach kann BitLocker evtl. wieder den TPM-Chip nutzen und das Start-Passwort entfällt (Lenovo Vantage / System Update).' 'Drivers' 'Treiber' } }
+            }
+        }
+    } catch { }
     # Funktionsupdate-Blocker (schnell: liest nur die letzte Setup-Scan-Datei des letzten Upgrade-Versuchs)
     try {
         $pan = ''
@@ -4415,6 +4504,7 @@ function Invoke-AfterRun {
     try { Invoke-NotifyCheck $items $run } catch { }
     try { Send-Integrations | Out-Null } catch { }
     if ($Script:IsAuto) { try { Invoke-AutoFix } catch { } }
+    try { Test-BlBiosUpdate } catch { }
 }
 function Get-BootTimes {
     $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-Diagnostics-Performance/Operational'; Id = 100 } -MaxEvents 20 -ErrorAction SilentlyContinue)
@@ -22018,6 +22108,7 @@ $pageSecurity = New-Page 'Sicherheit' 'Alle Schutzfunktionen dieses PCs auf eine
 
 # ---------------------------------------------------------------- Handbuch (wird mit jeder Version gepflegt)
 $ManualNews = @(
+    'Version 14.4: BitLocker wird jetzt überwacht - rote Warnung, wenn BitLocker dauerhaft ausgesetzt ist (Daten ungeschützt) oder nur noch der Wiederherstellungsschlüssel übrig ist (Abfrage bei jedem Start). Der BitLocker-Assistent repariert das mit einem Klick: zuerst über den TPM-Chip - geht das wegen eines BIOS-Fehlers nicht, mit einem Start-Passwort. Läuft BitLocker mit Start-Passwort, achtet PC-Tools auf ein neues BIOS (bei Lenovo direkt im Hersteller-Katalog) und gibt Bescheid, sobald sich der TPM-Schutz erneut lohnt.',
     'Version 14.3.4: Ändert PC-Tools im BIOS Secure Boot, TPM oder den Startmodus, wird BitLocker vorher automatisch für 2 Neustarts ausgesetzt - so fragt Windows danach nicht mehr nach dem Wiederherstellungsschlüssel. Der Hinweis bei "Punkte beheben" zu Secure Boot erklärt das jetzt auch für Änderungen direkt im BIOS-Menü.',
     'Version 14.3.3: Updates kommen jetzt auch ohne bzw. mit einem alten GitHub-Token an (öffentliches Repository). KI mit Ollama: Ist das gewählte Modell nicht geladen, nimmt PC-Tools automatisch ein vorhandenes oder lädt es selbst.',
     'Version 14.3.2: Port-Scanner und Sicherheits-Scan prüfen nur noch Adressen im eigenen Netz (z.B. 192.168.x.x, 10.x.x.x) - fremde Adressen im Internet werden nie gescannt. Das Setup zeigt vor der Installation die Datenschutz-Hinweise.',
@@ -43280,7 +43371,18 @@ function Get-BlWizChecks {
     $state = 'unbekannt'; $on = $false; $pct = 0
     if ($v) { $on = ([string]$v.ProtectionStatus -eq 'On') -or ([string]$v.VolumeStatus -match 'Encrypt'); $pct = [int]$v.EncryptionPercentage; $state = '{0} ({1} % verschlüsselt, Schutz {2})' -f $v.VolumeStatus, $pct, $(if ([string]$v.ProtectionStatus -eq 'On') { 'an' } else { 'aus' }) }
     & $add $(if ($on) { $true } else { $null }) ('Laufwerk ' + $env:SystemDrive) $state
-    [pscustomobject]@{ Checks = $c.ToArray(); CanEncrypt = [bool]($edOk -and $ed -notmatch '^Core' -and $tpm -and $tpm.TpmReady); IsOn = $on; Volume = $v; Pct = $pct }
+    $pcr = ''; try { $pcr = [string](@(& tpmtool.exe getdeviceinformation 2>$null | Where-Object { $_ -match 'PCR7' })[0]) } catch { }
+    $pcrBad = ($pcr -match 'nicht m|not possible')
+    if ($pcrBad) { & $add $null 'Secure-Boot-Bindung' 'nicht möglich - falls der TPM-Schutz deshalb scheitert, richtet der Assistent automatisch ein Start-Passwort ein' }
+    $ust = $null; try { $ust = Get-BlUnlockState } catch { }
+    $repair = $false
+    if ($ust -and $ust.Encrypted -and $ust.Protectors.Count) {
+        if ($ust.On -and -not $ust.HasUnlock) { & $add $false 'Schutz' 'nur Wiederherstellungsschlüssel - beim Start käme jedes Mal die Schlüsselabfrage'; $repair = $true }
+        elseif (-not $ust.On -and $ust.SuspendCount -le 0) { & $add $false 'Schutz' 'ausgesetzt - die Daten sind nicht geschützt'; $repair = $true }
+        elseif ($ust.HasPassword -and -not $ust.HasTpm) { & $add $null 'Schutz' 'Start-Passwort (TPM-Schutz ging nicht) - der Assistent versucht den TPM-Schutz erneut'; $repair = $true }
+        elseif ($ust.HasTpm) { & $add $true 'Schutz' 'TPM-Chip entsperrt beim Start automatisch' }
+    }
+    [pscustomobject]@{ Checks = $c.ToArray(); CanEncrypt = [bool]($edOk -and $ed -notmatch '^Core' -and $tpm -and $tpm.TpmReady); IsOn = $on; Volume = $v; Pct = $pct; Repair = $repair; State = $ust; Pcr7Bad = $pcrBad }
 }
 function Get-BlKeyLines([string]$Drive) {
     $v = Get-BitLockerVolume -MountPoint $Drive -ErrorAction Stop
@@ -43329,9 +43431,10 @@ function Show-BlWizard {
         $z = $script:BlWz
         $chk = Get-BlWizChecks; $script:BlWz.Chk = $chk
         $z.WzChecks.ItemsSource = @($chk.Checks)
-        $z.WzGo.Content = $(if ($chk.IsOn) { 'Schlüssel jetzt sichern' } else { 'Verschlüsseln und Schlüssel sichern' })
+        $z.WzGo.Content = $(if ($chk.Repair) { 'Schutz reparieren und Schlüssel sichern' } elseif ($chk.IsOn) { 'Schlüssel jetzt sichern' } else { 'Verschlüsseln und Schlüssel sichern' })
         $z.WzGo.IsEnabled = [bool]($chk.IsOn -or $chk.CanEncrypt)
         if (-not $chk.IsOn -and -not $chk.CanEncrypt) { $z.WzState.Text = 'Erst die rot markierten Punkte beheben - dann diesen Assistenten noch einmal öffnen.' }
+        elseif ($chk.Repair) { $z.WzState.Text = 'Der BitLocker-Schutz ist nicht in Ordnung (siehe oben). Der Assistent richtet ihn neu ein - geht der TPM-Chip nicht, mit einem Start-Passwort.' }
         elseif ($chk.IsOn) { $z.WzState.Text = 'BitLocker ist bereits an. Hier kannst du den Schlüssel zusätzlich an weiteren Orten sichern.' }
         else { $z.WzState.Text = 'Der PC bleibt während der Verschlüsselung normal nutzbar. Beim Start musst du nichts eingeben.' }
     }
@@ -43361,9 +43464,19 @@ function Invoke-BlWizardRun {
             if (-not (Confirm-Ui ("Laufwerk {0} jetzt mit BitLocker (XTS-AES 256) verschlüsseln?" -f $mp))) { return }
             $v = Get-BitLockerVolume -MountPoint $mp -ErrorAction Stop
             if (-not @($v.KeyProtector | Where-Object { [string]$_.KeyProtectorType -eq 'RecoveryPassword' }).Count) { $null = Add-BitLockerKeyProtector -MountPoint $mp -RecoveryPasswordProtector -ErrorAction Stop -WarningAction SilentlyContinue }
-            $null = Enable-BitLocker -MountPoint $mp -EncryptionMethod XtsAes256 -UsedSpaceOnly -TpmProtector -SkipHardwareTest -ErrorAction Stop -WarningAction SilentlyContinue
-            $log.Add('✓ BitLocker eingeschaltet - die Verschlüsselung läuft im Hintergrund.')
-        }
+            try {
+                $null = Enable-BitLocker -MountPoint $mp -EncryptionMethod XtsAes256 -UsedSpaceOnly -TpmProtector -SkipHardwareTest -ErrorAction Stop -WarningAction SilentlyContinue
+                $log.Add('✓ BitLocker eingeschaltet (TPM-Chip) - die Verschlüsselung läuft im Hintergrund.')
+            } catch {
+                $tpmErr = $_.Exception.Message
+                $pw = Read-BlStartPassword ('Der TPM-Chip kann BitLocker auf diesem PC nicht absichern ({0}). Das liegt meist am BIOS. Stattdessen schützt ein Start-Passwort, das du vor jedem Windows-Start eingibst.' -f $tpmErr)
+                if (-not $pw) { $log.Add('✗ TPM-Schutz ging nicht, Start-Passwort abgebrochen - BitLocker bleibt aus.'); throw 'abgebrochen' }
+                Set-BlPasswordPolicy
+                $null = Enable-BitLocker -MountPoint $mp -EncryptionMethod XtsAes256 -UsedSpaceOnly -PasswordProtector -Password $pw -SkipHardwareTest -ErrorAction Stop -WarningAction SilentlyContinue
+                Save-BlFallback ([pscustomobject]@{ Bios = (Get-BiosVersionText); Date = (Get-Date).ToString('o'); Latest = ''; Notified = ''; Checked = ''; Error = $tpmErr })
+                $log.Add('✓ BitLocker eingeschaltet (Start-Passwort statt TPM) - die Verschlüsselung läuft im Hintergrund. PC-Tools meldet sich, sobald ein neues BIOS da ist.')
+            }
+        } elseif ($chk.Repair) { foreach ($l in @(Repair-BlProtection $mp)) { $log.Add($l) } }
         $k = Get-BlKeyLines $mp
         if (-not $k) { throw 'Es gibt keinen Wiederherstellungsschlüssel für ' + $mp }
         $name = 'BitLocker-Schluessel_{0}_{1}.txt' -f $env:COMPUTERNAME, ($mp -replace '[:\\]', '')
@@ -43391,6 +43504,75 @@ function Invoke-BlWizardRun {
         $ui.StatusText.Text = 'BitLocker-Assistent: fertig.'
     } catch { $z.WzState.Text = (($log + @('✗ ' + $_.Exception.Message)) -join "`n") }
     finally { $z.Win.Cursor = $null; $z.WzGo.IsEnabled = $true; $z.WzGo.Content = 'Schlüssel jetzt sichern' }
+}
+# ---- BitLocker 14.4: Start-Passwort als Ausweg, wenn der TPM-Chip nicht geht
+function Set-BlPasswordPolicy {
+    $k = 'HKLM:\SOFTWARE\Policies\Microsoft\FVE'
+    New-Item $k -Force -ErrorAction Stop | Out-Null
+    foreach ($nv in @(@('UseAdvancedStartup', 1), @('EnableBDEWithNoTPM', 1), @('UseTPM', 2), @('UseTPMPIN', 2), @('UseTPMKey', 2), @('UseTPMKeyPIN', 2), @('OSPassphrase', 1))) { Set-ItemProperty -Path $k -Name $nv[0] -Value $nv[1] -Type DWord -ErrorAction Stop }
+}
+function Read-BlStartPassword([string]$Why) {
+    $x = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="PC-Tools - BitLocker-Start-Passwort" Width="560" SizeToContent="Height" WindowStartupLocation="CenterOwner" ResizeMode="NoResize" FontFamily="Segoe UI" FontSize="13.5" Background="#F4F6FA">
+  <StackPanel Margin="22">
+    <TextBlock Text="Start-Passwort für BitLocker" FontSize="20" FontWeight="SemiBold" Foreground="#1F2A44"/>
+    <TextBlock x:Name="PwWhy" TextWrapping="Wrap" Foreground="#475569" Margin="0,8,0,10"/>
+    <TextBlock Text="Wichtig: Beim Start gilt die englische Tastatur - Y und Z sind vertauscht, keine Umlaute. Am besten nur Buchstaben (ohne Y/Z) und Ziffern, mindestens 8 Zeichen." TextWrapping="Wrap" Foreground="#B45309" Margin="0,0,0,10"/>
+    <TextBlock Text="Passwort:" Foreground="#1F2A44"/><PasswordBox x:Name="Pw1" Padding="5" Margin="0,3,0,8"/>
+    <TextBlock Text="Wiederholen:" Foreground="#1F2A44"/><PasswordBox x:Name="Pw2" Padding="5" Margin="0,3,0,8"/>
+    <TextBlock x:Name="PwErr" Foreground="#DC2626" TextWrapping="Wrap"/>
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0"><Button x:Name="PwOk" Content="Start-Passwort einrichten" Padding="16,8" Margin="0,0,8,0" IsDefault="True"/><Button x:Name="PwNo" Content="Abbrechen" Padding="16,8" IsCancel="True"/></StackPanel>
+  </StackPanel>
+</Window>
+"@
+    $d = [Windows.Markup.XamlReader]::Parse((Convert-ThemeXaml $x)); try { $d.Owner = $(if ($script:BlWz -and $script:BlWz.Win) { $script:BlWz.Win } else { $window }) } catch { }
+    $d.FindName('PwWhy').Text = $Why
+    $script:BlPwDlg = $d; $script:BlPwRes = $null
+    $d.FindName('PwOk').Add_Click({
+        $dd = $script:BlPwDlg; $a = $dd.FindName('Pw1').Password; $b = $dd.FindName('Pw2').Password; $e = $dd.FindName('PwErr')
+        if ($a.Length -lt 8) { $e.Text = (T 'Mindestens 8 Zeichen.'); return }
+        if ($a -ne $b) { $e.Text = (T 'Die beiden Eingaben sind verschieden.'); return }
+        if ($a -match '[^\x20-\x7E]') { $e.Text = (T 'Bitte keine Umlaute oder Sonderzeichen außerhalb der englischen Tastatur.'); return }
+        $script:BlPwRes = $dd.FindName('Pw1').SecurePassword.Copy(); $dd.DialogResult = $true
+    })
+    [void]$d.ShowDialog()
+    $r = $script:BlPwRes; $script:BlPwRes = $null; $script:BlPwDlg = $null
+    return $r
+}
+# Schutz reparieren: TPM versuchen, sonst Start-Passwort; ausgesetzten Schutz wieder einschalten. Gibt Logzeilen zurück.
+function Repair-BlProtection([string]$Mp = $env:SystemDrive) {
+    $out = [System.Collections.Generic.List[string]]::new()
+    $st = Get-BlUnlockState $Mp
+    if (-not $st.HasTpm) {
+        try {
+            $null = Add-BitLockerKeyProtector -MountPoint $Mp -TpmProtector -ErrorAction Stop -WarningAction SilentlyContinue
+            $out.Add('✓ TPM-Schutz angelegt - der PC entsperrt sich beim Start wieder automatisch.')
+            if ($st.HasPassword) {
+                if (Confirm-Ui 'Der TPM-Schutz klappt jetzt wieder. Das Start-Passwort entfernen (kein Passwort mehr vor dem Windows-Start)?') {
+                    foreach ($kp in @($st.Volume.KeyProtector | Where-Object { [string]$_.KeyProtectorType -eq 'Password' })) { $null = Remove-BitLockerKeyProtector -MountPoint $Mp -KeyProtectorId $kp.KeyProtectorId -ErrorAction Stop -WarningAction SilentlyContinue }
+                    $out.Add('✓ Start-Passwort entfernt.')
+                }
+                try { Remove-Item -LiteralPath (Get-BlFallbackFile) -Force -ErrorAction SilentlyContinue } catch { }
+            }
+        } catch {
+            $tpmErr = $_.Exception.Message
+            if ($st.HasPassword) { $out.Add('! TPM-Schutz geht weiterhin nicht (' + $tpmErr + ') - das Start-Passwort bleibt. PC-Tools meldet sich bei einem neuen BIOS.') }
+            else {
+                $pw = Read-BlStartPassword ('Der TPM-Chip kann BitLocker auf diesem PC nicht absichern ({0}). Das liegt meist am BIOS (z.B. fehlerhaftes Mess-Protokoll nach Secure-Boot-Änderungen). Stattdessen schützt ein Start-Passwort.' -f $tpmErr)
+                if (-not $pw) { $out.Add('✗ TPM-Schutz ging nicht, Start-Passwort abgebrochen.'); return $out.ToArray() }
+                Set-BlPasswordPolicy
+                $null = Add-BitLockerKeyProtector -MountPoint $Mp -PasswordProtector -Password $pw -ErrorAction Stop -WarningAction SilentlyContinue
+                Save-BlFallback ([pscustomobject]@{ Bios = (Get-BiosVersionText); Date = (Get-Date).ToString('o'); Latest = ''; Notified = ''; Checked = ''; Error = $tpmErr })
+                $out.Add('✓ Start-Passwort eingerichtet (TPM-Chip geht nicht). PC-Tools meldet sich, sobald ein neues BIOS da ist.')
+            }
+        }
+    }
+    $st = Get-BlUnlockState $Mp
+    if (-not $st.On -and $st.HasUnlock) { $null = Resume-BitLocker -MountPoint $Mp -ErrorAction Stop; $out.Add('✓ BitLocker-Schutz wieder eingeschaltet.') }
+    elseif (-not $st.HasUnlock -and -not $st.On) { $out.Add('! Schutz bleibt ausgesetzt, bis TPM- oder Passwort-Schutz eingerichtet ist (sonst käme bei jedem Start die Schlüsselabfrage).') }
+    try { Test-BlBiosUpdate -Force } catch { }
+    return $out.ToArray()
 }
 $ui.BtnBlWizard.Add_Click({ try { Show-BlWizard } catch { Show-UiError ('BitLocker-Assistent: ' + $_.Exception.Message) } })
 # ---- Passwort-Check (14.3)
