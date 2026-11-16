@@ -46,6 +46,8 @@ data class Pc(
     val jobs: List<String>
 )
 
+class HaHttpException(val code: Int, msg: String) : Exception(msg)
+
 data class Job(val state: String, val action: String, val message: String, val time: String)
 
 object Ha {
@@ -98,8 +100,12 @@ object Ha {
     }
 
     // ---- HTTP
+    @Volatile private var checkedBase = ""
+
     private fun request(c: Context, method: String, path: String, body: String? = null, base: String? = null, tok: String? = null): String {
-        val u = URL((base ?: url(c)) + path)
+        val b = base ?: url(c)
+        if (b != checkedBase) { Lock.checkUrl(b)?.let { throw Exception(it) }; checkedBase = b }
+        val u = URL(b + path)
         val con = u.openConnection() as HttpURLConnection
         con.requestMethod = method
         con.connectTimeout = 10000
@@ -114,8 +120,8 @@ object Ha {
         val stream = if (code in 200..299) con.inputStream else con.errorStream
         val text = stream?.bufferedReader()?.use(BufferedReader::readText) ?: ""
         con.disconnect()
-        if (code == 401) throw Exception("Home Assistant: Zugangstoken ungültig (401)")
-        if (code !in 200..299) throw Exception("Home Assistant: HTTP $code ${text.take(200)}")
+        if (code == 401) throw HaHttpException(code, "Home Assistant: Zugangstoken ungültig oder ohne Rechte (401)")
+        if (code !in 200..299) throw HaHttpException(code, "Home Assistant: HTTP $code ${text.take(200)}")
         return text
     }
 
@@ -191,7 +197,19 @@ object Ha {
                 .put("by", "Android " + android.os.Build.MODEL)
                 .put("friendly_name", "$name Auftrag")
                 .put("icon", "mdi:clipboard-play"))
-        request(c, "POST", "/api/states/sensor.pcpflege_${key}_auftrag", body.toString())
+        try {
+            request(c, "POST", "/api/states/sensor.pcpflege_${key}_auftrag", body.toString())
+        } catch (e: HaHttpException) {
+            if (e.code != 401 && e.code != 403) throw e
+            // Token ohne Administratorrechte: Auftrag über den Helfer input_text.pctools_auftrag
+            val id = UUID.randomUUID().toString().replace("-", "").take(12)
+            val v = "$key|$action|$id|${System.currentTimeMillis() / 1000}"
+            try {
+                request(c, "POST", "/api/services/input_text/set_value", JSONObject().put("entity_id", "input_text.pctools_auftrag").put("value", v).toString())
+            } catch (e2: HaHttpException) {
+                throw Exception("Auftrag nicht möglich: Das Token hat keine Administratorrechte und der Helfer „input_text.pctools_auftrag“ fehlt in Home Assistant (Einstellungen > Geräte & Dienste > Helfer > Text, max. Länge 255).")
+            }
+        }
     }
 
     fun nice(iso: String): String {

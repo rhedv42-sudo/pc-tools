@@ -39,10 +39,16 @@ jobs:
           KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
         run: |
           if [ -n "$KS_B64" ]; then
-            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/pctools.jks"
-            echo "PCT_KEYSTORE=$RUNNER_TEMP/pctools.jks" >> "$GITHUB_ENV"
+            KS="$RUNNER_TEMP/pctools.keystore"
+            echo "$KS_B64" | tr -d ' \r\n' | base64 -d > "$KS"
+            T=PKCS12; keytool -list -keystore "$KS" -storetype PKCS12 -storepass "$KS_PASS" >/dev/null 2>&1 || T=JKS
+            ALIAS=$(keytool -list -v -keystore "$KS" -storetype $T -storepass "$KS_PASS" 2>/dev/null | sed -n 's/^Alias name: //p;s/^Aliasname: //p' | head -1)
+            if [ -z "$ALIAS" ]; then echo "::error::Schlüsseldatei oder Passwort falsch (ANDROID_KEYSTORE_B64 / ANDROID_KEYSTORE_PASS prüfen)"; exit 1; fi
+            echo "PCT_KEYSTORE=$KS" >> "$GITHUB_ENV"
             echo "PCT_KEYSTORE_PASS=$KS_PASS" >> "$GITHUB_ENV"
-            echo "::notice::Release-Signatur aus Secrets"
+            echo "PCT_KEY_ALIAS=$ALIAS" >> "$GITHUB_ENV"
+            echo "PCT_STORE_TYPE=$T" >> "$GITHUB_ENV"
+            echo "::notice::Release-Signatur aus Secrets ($T)"
           else
             echo "::warning::Kein ANDROID_KEYSTORE_B64-Secret - APK wird mit Debug-Schlüssel signiert (Updates ggf. nur nach Deinstallation)"
           fi
@@ -56,6 +62,8 @@ jobs:
           }
           mkdir -p ../dist
           cp app/build/outputs/apk/release/app-release.apk "../dist/PC-Tools-App-${{ steps.ver.outputs.version }}.apk"
+          AS=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$AS" verify --print-certs "../dist/PC-Tools-App-${{ steps.ver.outputs.version }}.apk" | grep -i "SHA-256" | head -1 | while IFS= read -r l; do echo "::notice::Signatur $l"; done
       - uses: actions/upload-artifact@v4
         with:
           name: PC-Tools-App
@@ -70,6 +78,8 @@ jobs:
           make_latest: false
           body: |
             **PC-Tools-App für Android** – Begleiter zu „Meine PCs“ über Home Assistant: Ampel aller PCs, Hilferufe mit Bericht, Hinweise, BitLocker- und BIOS-Stand, Aufträge (Pflege, Updates, Aufräumen, Virenscan, Sicherung, Zustand, PC-Tools aktualisieren) und Benachrichtigungen.
+
+            Neu: App-Sperre (Fingerabdruck/Handy-PIN), http nur im Heimnetz, Sperrbildschirm zeigt nur „Hilferuf von PC X“, Aufträge auch mit Home-Assistant-Benutzer ohne Administratorrechte (Helfer input_text.pctools_auftrag).
 
             Installation: APK auf dem Handy öffnen und „Installation aus dieser Quelle erlauben“ bestätigen. Voraussetzung: PC-Tools 14.6 oder neuer mit „Home Assistant direkt“ auf den PCs.
           files: dist/*.apk

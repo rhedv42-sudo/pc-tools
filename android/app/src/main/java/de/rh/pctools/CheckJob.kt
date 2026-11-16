@@ -51,7 +51,7 @@ class CheckJob : JobService() {
             for (pc in pcs) {
                 val helpKey = "help_" + pc.key
                 if (pc.helpOpen && pc.helpTime.isNotBlank() && p.getString(helpKey, "") != pc.helpTime) {
-                    notify(c, nm, pc, "🆘 Hilferuf von ${pc.name}", if (pc.helpMessage.isNotBlank()) pc.helpMessage else "Bericht in der App ansehen", pc.key.hashCode())
+                    notify(c, nm, pc, "Hilferuf von ${pc.name}", if (pc.helpMessage.isNotBlank()) pc.helpMessage else "Bericht in der App ansehen", pc.key.hashCode())
                     ed.putString(helpKey, pc.helpTime)
                 }
                 val stKey = "state_" + pc.key
@@ -73,6 +73,8 @@ class CheckJob : JobService() {
                 .setStyle(Notification.BigTextStyle().bigText(text))
                 .setContentIntent(pi)
                 .setAutoCancel(true)
+                .setVisibility(Notification.VISIBILITY_PRIVATE)
+                .setPublicVersion(Notification.Builder(c, CHANNEL).setSmallIcon(R.drawable.ic_notify).setContentTitle(title).setContentText("Details in der App ansehen").setContentIntent(pi).setAutoCancel(true).build())
                 .build()
             try { nm.notify(id, n) } catch (_: SecurityException) { }
         }

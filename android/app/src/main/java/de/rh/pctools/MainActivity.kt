@@ -33,7 +33,11 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (!Ha.isSetUp(this)) { startActivity(Intent(this, SetupActivity::class.java)); return }
-        load()
+        Lock.requireOpen(this) { load() }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (!Lock.onResult(requestCode, resultCode)) super.onActivityResult(requestCode, resultCode, data)
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
@@ -45,7 +49,7 @@ class MainActivity : Activity() {
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         when (item.itemId) {
             1 -> load()
-            2 -> startActivity(Intent(this, SetupActivity::class.java))
+            2 -> Lock.confirm(this, "Einstellungen öffnen") { startActivity(Intent(this, SetupActivity::class.java)) }
         }
         return true
     }

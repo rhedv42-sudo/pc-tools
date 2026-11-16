@@ -21,6 +21,7 @@ android {
         if (ksFile != null && file(ksFile).exists()) {
             create("release") {
                 storeFile = file(ksFile)
+                storeType = System.getenv("PCT_STORE_TYPE") ?: "PKCS12"
                 storePassword = System.getenv("PCT_KEYSTORE_PASS")
                 keyAlias = System.getenv("PCT_KEY_ALIAS") ?: "pctools"
                 keyPassword = System.getenv("PCT_KEY_PASS") ?: System.getenv("PCT_KEYSTORE_PASS")

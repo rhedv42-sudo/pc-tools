@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Auto, [switch]$Run, [string]$Parts = '', [switch]$Analyze, [switch]$CheckOnly, [string]$RunId = '', [string]$AppsFile = '', [string]$WingetFile = '', [string]$DirectFile = '', [string]$Monitor = '', [switch]$DeskArrange, [string]$Topology = '', [int]$Delay = 0, [switch]$Silent, [switch]$Install, [string]$JobFile = '', [switch]$Backup, [switch]$FleetPoll, [string]$FirstLogon = '', [switch]$NetDiag, [switch]$TbSync, [switch]$WinRepair, [switch]$NetDeep, [string]$DeepOpts = '', [switch]$FullBackup, [switch]$FullRepair, [switch]$NetDoc, [switch]$Sign, [string]$SignOpts = '', [string]$ChocoFile = '')
 
-$AppVersion = '14.6'
+$AppVersion = '14.6.1'
 $DefaultUpdateSource = 'github:rhedv42-sudo/pc-tools@stable'
 # Portabel (USB-Stick): Datei portable.txt neben dem Skript -> Einstellungen/Protokolle im Ordner Daten auf dem Stick
 $Script:IsPortable = [bool]($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'portable.txt')))
@@ -6180,20 +6180,32 @@ function Invoke-HaJobPoll {
     $h = @{ Authorization = 'Bearer ' + $sec.HaToken }; $u = ([string]$c.HaUrl).TrimEnd('/')
     $pc = ($env:COMPUTERNAME.ToLower() -replace '[^a-z0-9_]', '_')
     $ent = 'sensor.pcpflege_{0}_auftrag' -f $pc
-    $j = $null; try { $j = Invoke-RestMethod -Uri ('{0}/api/states/{1}' -f $u, $ent) -Headers $h -TimeoutSec 15 -ErrorAction Stop } catch { return }
-    $act = [string]$j.state; $id = [string]$j.attributes.id
-    if (-not $id -or $act -in '', 'unknown', 'erledigt', 'Fehler', 'läuft', 'abgelehnt') { return }
     $doneF = Join-Path $DataDir 'ha-auftraege.txt'
     $seen = @(); if (Test-Path -LiteralPath $doneF) { $seen = @(Get-Content -LiteralPath $doneF -ErrorAction SilentlyContinue) }
-    if ($seen -contains $id) { return }
+    $j = $null; try { $j = Invoke-RestMethod -Uri ('{0}/api/states/{1}' -f $u, $ent) -Headers $h -TimeoutSec 15 -ErrorAction Stop } catch { }
+    $act = ''; $id = ''; $jTime = $null; $jBy = ''
+    if ($j) { $act = [string]$j.state; $id = [string]$j.attributes.id; $jTime = $j.attributes.time; $jBy = [string]$j.attributes.by }
+    if (-not $id -or $act -in '', 'unknown', 'erledigt', 'Fehler', 'läuft', 'abgelehnt' -or $seen -contains $id) {
+        # Android-App mit Token ohne Administratorrechte: Auftrag kommt über den Helfer input_text.pctools_auftrag ("pc|aktion|id|unixzeit")
+        $act = ''; $id = ''
+        try {
+            $hv = Invoke-RestMethod -Uri ('{0}/api/states/input_text.pctools_auftrag' -f $u) -Headers $h -TimeoutSec 15 -ErrorAction Stop
+            $f = ([string]$hv.state).Split('|')
+            if ($f.Count -ge 4 -and $f[0] -eq $pc -and $f[2] -match '^[\w-]{6,40}$') {
+                $act = $f[1]; $id = 'hv-' + $f[2]; $jBy = 'Android-App (Helfer)'
+                try { $jTime = [DateTimeOffset]::FromUnixTimeSeconds([long]$f[3]).LocalDateTime } catch { $jTime = $null }
+            }
+        } catch { }
+        if (-not $id -or $seen -contains $id) { return }
+    }
     Add-Content -LiteralPath $doneF -Value $id -Encoding UTF8
     $post = { param($state, $msg) try { $b = @{ state = $state; attributes = @{ id = $id; action = $act; message = $msg; time = (Get-Date).ToString('o'); friendly_name = ('{0} Auftrag' -f $env:COMPUTERNAME); icon = 'mdi:clipboard-play' } } | ConvertTo-Json -Depth 3; Invoke-RestMethod -Uri ('{0}/api/states/{1}' -f $u, $ent) -Method Post -Headers $h -Body ([Text.Encoding]::UTF8.GetBytes($b)) -ContentType 'application/json; charset=utf-8' -TimeoutSec 15 | Out-Null } catch { } }
     $ok = @('Status', 'Pflege', 'Updates', 'Aufraeumen', 'Virenscan', 'Sicherung', 'Selbstupdate')
-    $age = 0; try { $age = ((Get-Date) - [datetime]$j.attributes.time).TotalHours } catch { }
+    $age = 99; try { $age = ((Get-Date) - [datetime]$jTime).TotalHours } catch { }
     if ($ok -notcontains $act) { & $post 'abgelehnt' ('Aktion nicht erlaubt: ' + $act); return }
     if ($age -gt 24) { & $post 'abgelehnt' 'Auftrag älter als 24 Stunden'; return }
     & $post 'läuft' ''
-    try { Add-Content (Join-Path (Join-Path $DataDir 'Logs') 'Fernauftraege.log') ('{0:yyyy-MM-dd HH:mm} Home Assistant: {1} ({2}) von {3}' -f (Get-Date), $act, $id, [string]$j.attributes.by) -Encoding UTF8 } catch { }
+    try { Add-Content (Join-Path (Join-Path $DataDir 'Logs') 'Fernauftraege.log') ('{0:yyyy-MM-dd HH:mm} Home Assistant: {1} ({2}) von {3}' -f (Get-Date), $act, $id, $jBy) -Encoding UTF8 } catch { }
     $msg = ''
     try {
         $parts = switch ($act) { 'Pflege' { @('Update', 'Clean', 'Optimize') } 'Updates' { @('Update') } 'Aufraeumen' { @('Clean') } 'Sicherung' { @('Backup') } 'Virenscan' { @('DefenderScan') } default { @() } }
@@ -22243,6 +22255,7 @@ $pageSecurity = New-Page 'Sicherheit' 'Alle Schutzfunktionen dieses PCs auf eine
 
 # ---------------------------------------------------------------- Handbuch (wird mit jeder Version gepflegt)
 $ManualNews = @(
+    'Version 14.6.1: Aufträge aus der Android-App gehen jetzt auch mit einem Home-Assistant-Benutzer ohne Administratorrechte - PC-Tools liest dafür zusätzlich den Helfer input_text.pctools_auftrag. Aufträge ohne Zeitangabe werden abgelehnt.',
     'Version 14.6: Neu: Was-ist-neu-Fenster nach jedem Update - zeigt alles, was seit deiner letzten Version dazugekommen ist. Neu: BIOS-Prüfung für Lenovo, HP und Dell - PC-Tools fragt einmal am Tag den Katalog des Herstellers, zeigt ein neues BIOS in der Ampel und meldet es. Neu in Meine PCs: Spalte BitLocker - ist BitLocker an, wie geschützt (TPM/Start-Passwort) und wo ist der Schlüssel gesichert (USB, Cloud, Ausdruck, Microsoft-Konto ...). Der Schlüssel selbst wird nie übertragen. Neu: Home Assistant bekommt Score, BitLocker, BIOS und offene Hilferufe - und PC-Tools kann Aufträge aus Home Assistant bzw. der neuen Android-App annehmen (Pflege, Updates, Aufräumen, Virenscan, Sicherung, Zustand, Selbstupdate).',
     'Version 14.5: BitLocker-Schlüssel als PDF - Seite Sicherheit > "Schlüssel als PDF sichern". Die PDF enthält alle Angaben zum PC (Modell, Seriennummer, Windows, BIOS, Secure Boot, TPM), für jedes verschlüsselte Laufwerk Schlüssel-ID, Kurzkennung und den 48-stelligen Schlüssel groß lesbar, eine Anleitung zur Eingabe und Tipps zur Aufbewahrung. Speichern mit einem Klick auf USB-Stick, in Cloud-Ordner (OneDrive, Google Drive, Dropbox, Nextcloud, iCloud - werden automatisch gefunden) oder einen anderen Ordner/NAS, jede Kopie wird geprüft. Der BitLocker-Assistent legt die PDF jetzt automatisch neben jede Schlüsseldatei und öffnet sie zum Drucken.',
     'Version 14.4: BitLocker wird jetzt überwacht - rote Warnung, wenn BitLocker dauerhaft ausgesetzt ist (Daten ungeschützt) oder nur noch der Wiederherstellungsschlüssel übrig ist (Abfrage bei jedem Start). Der BitLocker-Assistent repariert das mit einem Klick: zuerst über den TPM-Chip - geht das wegen eines BIOS-Fehlers nicht, mit einem Start-Passwort. Läuft BitLocker mit Start-Passwort, achtet PC-Tools auf ein neues BIOS (bei Lenovo direkt im Hersteller-Katalog) und gibt Bescheid, sobald sich der TPM-Schutz erneut lohnt.',

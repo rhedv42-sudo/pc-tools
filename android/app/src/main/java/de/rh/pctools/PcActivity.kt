@@ -2,6 +2,7 @@ package de.rh.pctools
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
 import android.os.Bundle
 import android.view.Menu
 import android.view.MenuItem
@@ -22,7 +23,11 @@ class PcActivity : Activity() {
         setContentView(ScrollView(this).apply { setBackgroundColor(Ui.BG); addView(root) })
     }
 
-    override fun onResume() { super.onResume(); load() }
+    override fun onResume() { super.onResume(); Lock.requireOpen(this) { load() } }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (!Lock.onResult(requestCode, resultCode)) super.onActivityResult(requestCode, resultCode, data)
+    }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menu.add(0, 1, 0, "Aktualisieren").setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
@@ -111,12 +116,12 @@ class PcActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle(Ha.jobLabel(action))
             .setMessage("Auftrag „${Ha.jobLabel(action)}“ an ${pc.name} senden?")
-            .setPositiveButton("Senden") { _, _ ->
+            .setPositiveButton("Senden") { _, _ -> Lock.confirm(this, Ha.jobLabel(action) + " an " + pc.name) {
                 Thread {
                     val msg = try { Ha.sendJob(this, pc.key, pc.name, action); "Auftrag gesendet – der PC holt ihn in spätestens 10 Minuten ab." } catch (e: Exception) { "Fehler: " + (e.message ?: e.toString()) }
                     runOnUiThread { AlertDialog.Builder(this).setMessage(msg).setPositiveButton("OK") { _, _ -> load() }.show() }
                 }.start()
-            }
+            } }
             .setNegativeButton("Abbrechen", null)
             .show()
     }
