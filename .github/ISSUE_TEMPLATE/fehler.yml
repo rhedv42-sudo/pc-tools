@@ -1,0 +1,33 @@
+name: Fehler melden
+description: Etwas funktioniert nicht wie erwartet
+labels: [fehler]
+body:
+  - type: markdown
+    attributes:
+      value: "Danke fürs Melden! Bitte keine Passwörter, Schlüssel oder persönlichen Daten in Logs oder Screenshots."
+  - type: input
+    id: version
+    attributes:
+      label: PC-Tools-Version
+      description: Steht unten links in PC-Tools bzw. unter Hilfe.
+      placeholder: z.B. 14.6
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows-Version
+      placeholder: z.B. Windows 11 Pro 25H2
+  - type: textarea
+    id: was
+    attributes:
+      label: Was ist passiert?
+      description: Was hast du gemacht, was hast du erwartet, was kam stattdessen?
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Protokoll / Fehlermeldung
+      description: Gern die letzten Zeilen aus dem Protokoll (PC-Tools > Protokolle) oder einen Screenshot.
+      render: text
