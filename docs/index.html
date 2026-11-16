@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PC-Tools – kostenlose Windows-Pflege mit einem Klick</title>
+<meta name="description" content="PC-Tools: kostenloses Open-Source-Wartungstool für Windows. Updates, Treiber, Aufräumen, Zustands-Score mit Ein-Klick-Reparatur, Datensicherung, BitLocker-Assistent, Fernhilfe, Einfach-Modus – in 12 Sprachen, ohne Telemetrie.">
+<meta property="og:title" content="PC-Tools – kostenlose Windows-Pflege mit einem Klick">
+<meta property="og:description" content="Open Source, ohne Telemetrie: Updates, Aufräumen, Zustands-Score, Datensicherung, BitLocker-Assistent, Fernhilfe – für Familie, Freunde und kleine Firmen.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231C4FA6'/%3E%3Crect x='12' y='16' width='40' height='26' rx='3' fill='white'/%3E%3Ccircle cx='32' cy='29' r='7' fill='%2322C55E'/%3E%3Crect x='24' y='46' width='16' height='4' fill='white'/%3E%3C/svg%3E">
+<style>
+:root{--bg:#f4f6fa;--card:#fff;--text:#1f2a44;--muted:#5b6880;--line:#e2e7f0;--blue:#1c4fa6;--blue2:#2d7ff9;--green:#16a34a;--chip:#e8eef9}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1420;--card:#171e2d;--text:#e6ebf5;--muted:#9aa5b8;--line:#263044;--blue:#5b8def;--blue2:#7aa7ff;--chip:#1f2a40}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;font-family:"Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.55}
+a{color:var(--blue2)}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+header{background:linear-gradient(135deg,#163e84,#1c4fa6 55%,#2d7ff9);color:#fff}
+nav{display:flex;align-items:center;justify-content:space-between;padding:16px 0;gap:12px;flex-wrap:wrap}
+nav .logo{display:flex;align-items:center;gap:10px;font-weight:700;font-size:20px}
+nav .links a{color:#e6efff;text-decoration:none;margin-left:18px;font-size:15px}
+.hero{display:grid;grid-template-columns:1.2fr 1fr;gap:36px;align-items:center;padding:36px 0 64px}
+.hero h1{font-size:44px;line-height:1.1;margin:0 0 16px}
+.hero p{font-size:18px;color:#dbe6ff;margin:0 0 24px}
+.btn{display:inline-flex;align-items:center;gap:10px;padding:14px 22px;border-radius:12px;font-weight:600;font-size:16px;text-decoration:none}
+.btn.main{background:#22c55e;color:#06210f}.btn.main:hover{background:#2fd56b}
+.btn.sec{background:rgba(255,255,255,.14);color:#fff;border:1px solid rgba(255,255,255,.3)}
+.btns{display:flex;gap:12px;flex-wrap:wrap}
+.small{font-size:13px;color:#c9d7f5;margin-top:12px}
+.mock{background:#f4f6fa;border-radius:16px;box-shadow:0 20px 50px rgba(0,0,0,.35);padding:18px;color:#1f2a44}
+.mock .bar{display:flex;gap:6px;margin-bottom:12px}.mock .bar i{width:10px;height:10px;border-radius:50%;background:#cbd3e1;display:block}
+.mock .score{display:flex;align-items:center;gap:16px;background:#fff;border-radius:12px;padding:16px;margin-bottom:10px}
+.mock .light{width:56px;height:56px;border-radius:50%;background:#22c55e;box-shadow:0 0 0 6px #dcfce7}
+.mock .big{font-size:30px;font-weight:700}.mock .lbl{font-size:13px;color:#5b6880}
+.mock .row{display:flex;gap:8px}.mock .row div{flex:1;background:#fff;border-radius:10px;padding:10px;font-size:13px}
+.mock .fix{margin-top:10px;background:#1c4fa6;color:#fff;border-radius:10px;padding:12px;text-align:center;font-weight:600}
+section{padding:56px 0}
+h2{font-size:30px;margin:0 0 8px}.lead{color:var(--muted);margin:0 0 28px;font-size:17px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px}
+.card h3{margin:6px 0 6px;font-size:18px}.card p{margin:0;color:var(--muted);font-size:15px}
+.ico{font-size:26px}
+.steps{counter-reset:s;display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.steps .card:before{counter-increment:s;content:counter(s);display:inline-grid;place-items:center;width:34px;height:34px;border-radius:50%;background:var(--blue);color:#fff;font-weight:700;margin-bottom:8px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}.chips span{background:var(--chip);border-radius:999px;padding:6px 12px;font-size:14px}
+details{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin-bottom:10px}
+details summary{cursor:pointer}details p{color:var(--muted);margin:10px 0 0}
+.cta{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:28px;display:flex;gap:20px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+footer{border-top:1px solid var(--line);padding:28px 0;color:var(--muted);font-size:14px}
+footer a{margin-right:16px}
+@media (max-width:860px){.hero{grid-template-columns:1fr}.hero h1{font-size:34px}.grid,.steps{grid-template-columns:1fr}nav .links{display:none}}
+</style>
+</head>
+<body>
+<header>
+ <div class="wrap">
+  <nav>
+   <div class="logo"><svg width="30" height="30" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#fff" opacity=".18"/><rect x="12" y="16" width="40" height="26" rx="3" fill="#fff"/><circle cx="32" cy="29" r="7" fill="#22C55E"/><rect x="24" y="46" width="16" height="4" fill="#fff"/></svg>PC-Tools</div>
+   <div class="links"><a href="#funktionen">Funktionen</a><a href="#start">Installation</a><a href="#app">Meine PCs &amp; App</a><a href="#faq">Fragen</a><a href="#neu">Neuigkeiten</a><a href="https://github.com/rhedv42-sudo/pc-tools">GitHub</a></div>
+  </nav>
+  <div class="hero">
+   <div>
+    <h1>Windows gepflegt, sicher und schnell – mit einem Klick.</h1>
+    <p>PC-Tools ist ein kostenloses Open-Source-Werkzeug für Windows: Updates, Treiber, Aufräumen, Reparatur, Datensicherung und Sicherheit an einem Ort – so einfach, dass es auch Eltern und Großeltern bedienen können.</p>
+    <div class="btns">
+     <a class="btn main" href="https://github.com/rhedv42-sudo/pc-tools/releases/latest">⬇ Kostenlos herunterladen</a>
+     <a class="btn sec" href="https://github.com/rhedv42-sudo/pc-tools">★ Auf GitHub ansehen</a>
+    </div>
+    <div class="small">Windows 10 und 11 · auch für Linux · 12 Sprachen · keine Werbung, keine Telemetrie · Apache-2.0-Lizenz</div>
+   </div>
+   <div class="mock" aria-hidden="true">
+    <div class="bar"><i></i><i></i><i></i></div>
+    <div class="score"><div class="light"></div><div><div class="big">92 / 100</div><div class="lbl">Zustands-Score · Alles in Ordnung</div></div></div>
+    <div class="row"><div>✔ Windows aktuell</div><div>✔ Virenschutz an</div><div>✔ Sicherung 2 Tage alt</div></div>
+    <div class="fix">Alles automatisch</div>
+   </div>
+  </div>
+ </div>
+</header>
+
+<section id="funktionen"><div class="wrap">
+ <h2>Was PC-Tools kann</h2>
+ <p class="lead">Alles, was ein Windows-PC regelmäßig braucht – automatisch im Hintergrund oder mit einem Klick.</p>
+ <div class="grid">
+  <div class="card"><div class="ico">🚦</div><h3>Zustands-Score &amp; „Punkte beheben“</h3><p>Eine Ampel mit Score von 0 bis 100 zeigt, wie es dem PC geht. Ein Klick behebt alles, was sich automatisch beheben lässt.</p></div>
+  <div class="card"><div class="ico">⟳</div><h3>Updates &amp; Treiber</h3><p>Windows-, Programm- und Treiber-Updates (winget, Windows Update, Hersteller-Pakete von Lenovo, HP und Dell) inklusive BIOS-Prüfung.</p></div>
+  <div class="card"><div class="ico">🧹</div><h3>Aufräumen &amp; Tempo</h3><p>Temporäre Dateien, Update-Reste und Autostart-Bremsen – mit Startzeit-Analyse, die zeigt, was den Start wirklich verlangsamt.</p></div>
+  <div class="card"><div class="ico">🛡️</div><h3>Sicherheit</h3><p>Virenschutz, Firewall, Secure Boot und TPM prüfen, Passwort-Check gegen Datenlecks (das Passwort verlässt den PC nie), Netzwerk-Scan nur im eigenen Netz.</p></div>
+  <div class="card"><div class="ico">🔐</div><h3>BitLocker-Assistent</h3><p>Prüft, verschlüsselt und sichert den Wiederherstellungsschlüssel an mehreren Orten – auch als ausführliche PDF für USB-Stick, Cloud oder Ausdruck.</p></div>
+  <div class="card"><div class="ico">💾</div><h3>Datensicherung</h3><p>Dateien und komplette Systemabbilder auf USB-Platte oder NAS, mit Zeitplan und Kontrolle, ob die Sicherung wirklich aktuell ist.</p></div>
+  <div class="card"><div class="ico">🆘</div><h3>Hilfe holen</h3><p>Ein Klick schickt dem Helfer einen Bericht mit Zustand, Problemen und Protokoll – über „Meine PCs“, Handy-Nachricht, Home Assistant oder E-Mail.</p></div>
+  <div class="card"><div class="ico">👵</div><h3>Einfach-Modus</h3><p>Nur eine große Ampel und zwei Knöpfe: „Alles reparieren“ und „Hilfe holen“. Ideal für Einsteiger.</p></div>
+  <div class="card"><div class="ico">🤖</div><h3>KI-Assistent (optional)</h3><p>Erklärt Fehlermeldungen, Bluescreens und Ereignisse in einfachen Worten – kostenlos lokal mit Ollama oder mit einem KI-Anbieter deiner Wahl.</p></div>
+ </div>
+</div></section>
+
+<section id="start" style="padding-top:0"><div class="wrap">
+ <h2>In drei Schritten startklar</h2>
+ <p class="lead">Keine Anmeldung, kein Konto, kein Abo.</p>
+ <div class="steps">
+  <div class="card"><h3>Herunterladen</h3><p>Auf der <a href="https://github.com/rhedv42-sudo/pc-tools/releases/latest">Download-Seite</a> die Datei <b>PC-Tools-Setup-….exe</b> laden (oder die portable ZIP ohne Installation).</p></div>
+  <div class="card"><h3>Installieren</h3><p>Setup starten. Zeigt Windows „Der Computer wurde durch Windows geschützt“: auf <b>Weitere Informationen</b> und <b>Trotzdem ausführen</b> klicken (siehe Fragen unten).</p></div>
+  <div class="card"><h3>Loslegen</h3><p>Sprache und Lite- oder Vollversion wählen, dann den grünen Knopf <b>„Alles automatisch“</b> drücken – den Rest erledigt der Zeitplan.</p></div>
+ </div>
+</div></section>
+
+<section id="app" style="padding-top:0"><div class="wrap">
+ <h2>Meine PCs – für alle, die bei Familie und Freunden helfen</h2>
+ <p class="lead">Alle PCs auf einen Blick: Ampel, Score, Hilferufe, BitLocker- und Sicherungsstand, Aufträge wie „Pflege“ oder „Updates“ – über einen gemeinsamen Ordner (NAS) oder Home Assistant.</p>
+ <div class="grid">
+  <div class="card"><div class="ico">🖥️</div><h3>Übersicht in PC-Tools</h3><p>Jeder PC meldet seinen Zustand. Hilferufe erscheinen rot mit Bericht – Aufträge gehen mit einem Klick an den PC.</p></div>
+  <div class="card"><div class="ico">📱</div><h3>Android-App</h3><p>Die PC-Tools-App zeigt die Ampel aller PCs, meldet Hilferufe aufs Handy und schickt Aufträge – über deinen Home Assistant. <a href="https://github.com/rhedv42-sudo/pc-tools/releases">APK bei den Releases</a> (Tag „android-v…“).</p></div>
+  <div class="card"><div class="ico">🏠</div><h3>Home Assistant</h3><p>Per MQTT oder REST erscheint jeder PC als Gerät mit Sensoren – für eigene Dashboards und Automationen.</p></div>
+ </div>
+</div></section>
+
+<section style="padding-top:0"><div class="wrap">
+ <h2>Datenschutz</h2>
+ <p class="lead">PC-Tools sendet nichts nach Hause. Keine Telemetrie, keine Nutzerdaten, keine Werbung. Verbindungen ins Internet gibt es nur für Funktionen, die du selbst nutzt (z.B. Updates) – alles aufgelistet in der <a href="https://github.com/rhedv42-sudo/pc-tools/blob/main/DATENSCHUTZ.md">Datenschutz-Erklärung</a>. Der Quelltext ist offen und für jeden prüfbar.</p>
+ <div class="chips"><span>Open Source (Apache 2.0)</span><span>keine Telemetrie</span><span>Zugangsdaten verschlüsselt (DPAPI)</span><span>Builds automatisch über GitHub Actions</span><span>12 Sprachen</span><span>Windows 10 · 11 · Linux</span></div>
+</div></section>
+
+<section id="faq" style="padding-top:0"><div class="wrap">
+ <h2>Häufige Fragen</h2>
+ <details><summary><b>Windows warnt „Der Computer wurde durch Windows geschützt“ – ist das gefährlich?</b></summary><p>Die Warnung (SmartScreen) erscheint bei neuen Programmen, die noch nicht oft heruntergeladen wurden bzw. noch keine kostenpflichtige Code-Signatur haben. PC-Tools ist Open Source; jede Version wird automatisch aus dem öffentlichen Quelltext gebaut. Klicke auf „Weitere Informationen“ und „Trotzdem ausführen“. Mit mehr Downloads verschwindet die Warnung von selbst.</p></details>
+ <details><summary><b>Was kostet PC-Tools?</b></summary><p>Nichts. Es ist kostenlos und quelloffen – privat und in Firmen.</p></details>
+ <details><summary><b>Brauche ich Technik-Kenntnisse?</b></summary><p>Nein. Der Knopf „Alles automatisch“ bzw. der Einfach-Modus genügt. Wer mehr will, findet in der Vollversion über 40 Seiten mit Werkzeugen.</p></details>
+ <details><summary><b>Läuft es auch auf Windows 10 und auf Linux?</b></summary><p>Ja. Windows 10 und 11 (64 Bit) werden voll unterstützt, für Linux gibt es eigene Pakete (.deb / .tar.gz).</p></details>
+ <details><summary><b>Wie melde ich einen Fehler oder wünsche mir etwas?</b></summary><p>Über die <a href="https://github.com/rhedv42-sudo/pc-tools/issues">Issues</a> oder die <a href="https://github.com/rhedv42-sudo/pc-tools/discussions">Diskussionen</a> auf GitHub – Übersetzungsfehler direkt aus PC-Tools heraus.</p></details>
+</div></section>
+
+<section id="neu" style="padding-top:0"><div class="wrap">
+ <h2>Neuigkeiten</h2>
+ <p class="lead">PC-Tools wird laufend weiterentwickelt. Die letzten Versionen:</p>
+ <details open><summary><b>Version 14.6</b></summary><p>Neu: Was-ist-neu-Fenster nach jedem Update - zeigt alles, was seit deiner letzten Version dazugekommen ist. Neu: BIOS-Prüfung für Lenovo, HP und Dell - PC-Tools fragt einmal am Tag den Katalog des Herstellers, zeigt ein neues BIOS in der Ampel und meldet es. Neu in Meine PCs: Spalte BitLocker - ist BitLocker an, wie geschützt (TPM/Start-Passwort) und wo ist der Schlüssel gesichert (USB, Cloud, Ausdruck, Microsoft-Konto ...). Der Schlüssel selbst wird nie übertragen. Neu: Home Assistant bekommt Score, BitLocker, BIOS und offene Hilferufe - und PC-Tools kann Aufträge aus Home Assistant bzw. der neuen Android-App annehmen (Pflege, Updates, Aufräumen, Virenscan, Sicherung, Zustand, Selbstupdate).</p></details>
+<details><summary><b>Version 14.5</b></summary><p>BitLocker-Schlüssel als PDF - Seite Sicherheit &gt; &quot;Schlüssel als PDF sichern&quot;. Die PDF enthält alle Angaben zum PC (Modell, Seriennummer, Windows, BIOS, Secure Boot, TPM), für jedes verschlüsselte Laufwerk Schlüssel-ID, Kurzkennung und den 48-stelligen Schlüssel groß lesbar, eine Anleitung zur Eingabe und Tipps zur Aufbewahrung. Speichern mit einem Klick auf USB-Stick, in Cloud-Ordner (OneDrive, Google Drive, Dropbox, Nextcloud, iCloud - werden automatisch gefunden) oder einen anderen Ordner/NAS, jede Kopie wird geprüft. Der BitLocker-Assistent legt die PDF jetzt automatisch neben jede Schlüsseldatei und öffnet sie zum Drucken.</p></details>
+<details><summary><b>Version 14.4</b></summary><p>BitLocker wird jetzt überwacht - rote Warnung, wenn BitLocker dauerhaft ausgesetzt ist (Daten ungeschützt) oder nur noch der Wiederherstellungsschlüssel übrig ist (Abfrage bei jedem Start). Der BitLocker-Assistent repariert das mit einem Klick: zuerst über den TPM-Chip - geht das wegen eines BIOS-Fehlers nicht, mit einem Start-Passwort. Läuft BitLocker mit Start-Passwort, achtet PC-Tools auf ein neues BIOS (bei Lenovo direkt im Hersteller-Katalog) und gibt Bescheid, sobald sich der TPM-Schutz erneut lohnt.</p></details>
+<details><summary><b>Version 14.3.4</b></summary><p>Ändert PC-Tools im BIOS Secure Boot, TPM oder den Startmodus, wird BitLocker vorher automatisch für 2 Neustarts ausgesetzt - so fragt Windows danach nicht mehr nach dem Wiederherstellungsschlüssel. Der Hinweis bei &quot;Punkte beheben&quot; zu Secure Boot erklärt das jetzt auch für Änderungen direkt im BIOS-Menü.</p></details>
+<details><summary><b>Version 14.3.3</b></summary><p>Updates kommen jetzt auch ohne bzw. mit einem alten GitHub-Token an (öffentliches Repository). KI mit Ollama: Ist das gewählte Modell nicht geladen, nimmt PC-Tools automatisch ein vorhandenes oder lädt es selbst.</p></details>
+<details><summary><b>Version 14.3.2</b></summary><p>Port-Scanner und Sicherheits-Scan prüfen nur noch Adressen im eigenen Netz (z.B. 192.168.x.x, 10.x.x.x) - fremde Adressen im Internet werden nie gescannt. Das Setup zeigt vor der Installation die Datenschutz-Hinweise.</p></details>
+<details><summary><b>Version 14.3.1</b></summary><p>Alle neuen Funktionen seit 14.0 (KI-Assistent, Punkte beheben, Startzeit-Analyse, Hilfe holen, Einfach-Modus, Passwort-Check, BitLocker-Assistent) sind jetzt in allen 12 Sprachen übersetzt.</p></details>
+<details><summary><b>Version 14.3</b></summary><p>Neu auf der Seite Sicherheit - Passwort-Check: prüft einzelne Passwörter oder alle aus dem Browser exportierten gegen bekannte Datenlecks (Have I Been Pwned). Das Passwort verlässt den PC nie, nur 5 Zeichen seines Fingerabdrucks. Zeigt auch mehrfach verwendete und zu einfache Passwörter und löscht die Export-Datei danach sicher. Neu: BitLocker-Assistent - prüft TPM, Edition, Secure Boot und Netzteil, verschlüsselt und legt den Wiederherstellungsschlüssel an mehreren Orten ab (USB-Stick, Ordner/NAS, Microsoft- oder Firmenkonto, Ausdruck, Lizenz-Tresor) und kontrolliert jede Kopie.</p></details>
+<details><summary><b>Version 14.2</b></summary><p>Neu &quot;Hilfe holen&quot; - beim Zustands-Score und im Einfach-Modus. Ein Klick schickt dem Helfer einen Bericht (Zustand, Probleme, Fehler der letzten 3 Tage, Protokoll): in &quot;Meine PCs&quot; erscheint ein roter Hilferuf mit Bericht, aufs Handy kommt eine Nachricht (wenn eingerichtet), auf Wunsch wird eine E-Mail vorbereitet - sonst liegt der Bericht auf dem Desktop. Neu: Einfach-Modus für Eltern, Großeltern und Einsteiger - nur eine große Ampel und zwei Knöpfe &quot;Alles reparieren&quot; und &quot;Hilfe holen&quot; (Einstellungen &gt; Stabilität oder beim ersten Start).</p></details>
+<details><summary><b>Version 14.1</b></summary><p>Treiber für Geräte mit Problem (z.B. Code 48/28) sucht PC-Tools jetzt gezielt - erst über Windows Update, dann über das offizielle Treiberpaket von HP, Lenovo oder Dell (Seite Geräte und &quot;Punkte beheben&quot;). Neu auf der Seite Autostart: Startzeit-Analyse zeigt, welche Programme, Dienste und Treiber den Start wie viele Sekunden bremsen, und entschärft sie mit einem Klick. Beim Zustands-Score: &quot;Automatisch beheben, wenn der Score unter ... fällt&quot; - nach jedem geplanten Lauf wird erledigt, was sicher automatisch geht, der Rest kommt als Hinweis.</p></details>
+<details><summary><b>Version 14.0.1</b></summary><p>Neuer Knopf &quot;Punkte beheben&quot; beim Zustands-Score - behebt mit einem Klick alles, was automatisch geht (Updates und Treiber nachinstallieren, Aufräumen, Autostart aufräumen, Geräte-Probleme, Virendefinitionen, Firewall) und sagt ehrlich, was nur von Hand geht (z.B. Secure Boot im BIOS). Fehlgeschlagene Updates zählen im Score nur noch, wenn sie seitdem nicht doch erfolgreich installiert wurden.</p></details>
+<details><summary><b>Version 14.0</b></summary><p>PC-Tools spricht jetzt 12 Sprachen - Deutsch, English, Español, Français, Italiano, Português (Brasil), Polski, Türkçe, Русский, 简体中文, 日本語 und 한국어. Die Sprache wählst du beim ersten Start oder jederzeit unter Einstellungen &gt; Stabilität &gt; Sprache; auch der KI-Assistent antwortet in deiner Sprache. Die Übersetzungen sind maschinell (KI) erstellt - Fehler bitte über &quot;Übersetzungsfehler melden&quot; mitteilen. Dazu: PC-Tools.exe, Installationsprogramm und die Linux-Ausgabe.</p></details>
+<details><summary><b>Version 13.9.2</b></summary><p>Das Symbol in der Taskleiste ist repariert (eigenes PC-Tools-Symbol in allen Größen, auch beim Anheften). Neu: PC-Tools.exe als Starter und ein Installationsprogramm (PC-Tools-Setup.exe) - und die ersten Sprachen: English, Español, Русский und 简体中文 (Einstellungen &gt; Stabilität &gt; Sprache). Weitere Sprachen folgen mit Version 14.</p></details>
+<details><summary><b>Version 13.9.1</b></summary><p>&quot;Nicht genutzte Programme&quot; entfernt jetzt auch Programme ohne stillen Deinstallationsweg: erst still (MSI, Inno, NSIS, electron-builder, WiX, Squirrel), dann über winget, dann über das Deinstallationsprogramm des Herstellers, bei portablen Programmen ohne Deinstaller werden Ordner (Papierkorb) und Eintrag (gesichert) entfernt. Vorbereitung für die Mehrsprachigkeit von Version 14.</p></details>
+ <p><a href="https://github.com/rhedv42-sudo/pc-tools/releases">Alle Versionen auf GitHub</a></p>
+</div></section>
+
+<section style="padding-top:0"><div class="wrap">
+ <div class="cta">
+  <div><h2 style="margin:0">Gefällt dir PC-Tools?</h2><p class="lead" style="margin:6px 0 0">Ein ★ auf GitHub hilft anderen, das Projekt zu finden – und hilft bei der kostenlosen Code-Signatur.</p></div>
+  <div class="btns"><a class="btn main" href="https://github.com/rhedv42-sudo/pc-tools/releases/latest">⬇ Herunterladen</a><a class="btn" style="background:var(--chip);color:var(--text)" href="https://github.com/rhedv42-sudo/pc-tools">★ Stern geben</a></div>
+ </div>
+</div></section>
+
+<footer><div class="wrap">
+ <a href="https://github.com/rhedv42-sudo/pc-tools">GitHub</a><a href="https://github.com/rhedv42-sudo/pc-tools/blob/main/DATENSCHUTZ.md">Datenschutz</a><a href="https://github.com/rhedv42-sudo/pc-tools/blob/main/CODE-SIGNING.md">Code signing policy</a><a href="https://github.com/rhedv42-sudo/pc-tools/blob/main/LICENSE">Lizenz</a>
+ <p>PC-Tools by RH – René Hütt. Open Source unter Apache 2.0. Windows ist eine Marke von Microsoft; PC-Tools ist kein Microsoft-Produkt.</p>
+ <p lang="en"><b>English:</b> PC-Tools is a free, open-source all-in-one maintenance tool for Windows (and Linux): updates, cleanup, health score with one-click fixes, backup, BitLocker assistant, remote help and a simple mode – in 12 languages, no telemetry. <a href="https://github.com/rhedv42-sudo/pc-tools/releases/latest">Download</a>.</p>
+</div></footer>
+</body>
+</html>

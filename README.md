@@ -1,5 +1,12 @@
 # PC-Tools
 
+[![Download](https://img.shields.io/github/v/release/rhedv42-sudo/pc-tools?label=Download&color=22c55e)](https://github.com/rhedv42-sudo/pc-tools/releases/latest)
+[![Webseite](https://img.shields.io/badge/Webseite-rhedv42--sudo.github.io%2Fpc--tools-1c4fa6)](https://rhedv42-sudo.github.io/pc-tools/)
+[![Lizenz](https://img.shields.io/github/license/rhedv42-sudo/pc-tools)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/rhedv42-sudo/pc-tools?style=social)](https://github.com/rhedv42-sudo/pc-tools/stargazers)
+
+**[⬇ Download](https://github.com/rhedv42-sudo/pc-tools/releases/latest)** · **[Webseite](https://rhedv42-sudo.github.io/pc-tools/)** · **[Fragen & Ideen](https://github.com/rhedv42-sudo/pc-tools/discussions)** · Gefällt es dir? Ein ★ hilft anderen, PC-Tools zu finden.
+
 Kostenloses, quelloffenes Wartungs- und Diagnosewerkzeug für Windows 10/11 und Windows Server
 (PowerShell + WPF, eine einzige nachvollziehbare Skriptdatei).
 
