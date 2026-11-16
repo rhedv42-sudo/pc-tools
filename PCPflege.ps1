@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Auto, [switch]$Run, [string]$Parts = '', [switch]$Analyze, [switch]$CheckOnly, [string]$RunId = '', [string]$AppsFile = '', [string]$WingetFile = '', [string]$DirectFile = '', [string]$Monitor = '', [switch]$DeskArrange, [string]$Topology = '', [int]$Delay = 0, [switch]$Silent, [switch]$Install, [string]$JobFile = '', [switch]$Backup, [switch]$FleetPoll, [string]$FirstLogon = '', [switch]$NetDiag, [switch]$TbSync, [switch]$WinRepair, [switch]$NetDeep, [string]$DeepOpts = '', [switch]$FullBackup, [switch]$FullRepair, [switch]$NetDoc, [switch]$Sign, [string]$SignOpts = '', [string]$ChocoFile = '')
 
-$AppVersion = '14.4'
+$AppVersion = '14.5'
 $DefaultUpdateSource = 'github:rhedv42-sudo/pc-tools@stable'
 # Portabel (USB-Stick): Datei portable.txt neben dem Skript -> Einstellungen/Protokolle im Ordner Daten auf dem Stick
 $Script:IsPortable = [bool]($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'portable.txt')))
@@ -22079,7 +22079,7 @@ $pageSecurity = New-Page 'Sicherheit' 'Alle Schutzfunktionen dieses PCs auf eine
     (New-Card 'BitLocker-Laufwerksverschlüsselung' @(
         '<TextBlock x:Name="BlInfo" Text="Schützt die Daten, wenn der Laptop gestohlen wird. Den Wiederherstellungsschlüssel unbedingt außerhalb des PCs aufbewahren (USB-Stick, Ausdruck, Microsoft-Konto)." Foreground="#6B7890" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,6"/>',
         (New-White (New-DataGrid 'BlGrid' @('Laufwerk|Drive|80', 'Zustand|State|170', 'Verschlüsselt|Pct|100', 'Methode|Method|130', 'Entsperren über|Protectors|*') 'Height="140"')),
-        '<WrapPanel Margin="0,8,0,0"><Button x:Name="BtnBlWizard" Content="BitLocker-Assistent ..." ToolTip="Schritt für Schritt: prüfen, verschlüsseln und den Schlüssel an mehreren sicheren Orten ablegen"/><Button x:Name="BtnBlOneClick" Content="C: mit einem Klick verschlüsseln" Style="{StaticResource Sec}" ToolTip="Verschlüsselt das Windows-Laufwerk und legt den Wiederherstellungsschlüssel automatisch im PC-Tools-Ordner ab."/><Button x:Name="BtnBlKeyFolder" Content="Schlüssel-Ordner öffnen" Style="{StaticResource Sec}"/><Button x:Name="BtnBlOn" Content="Anderes Laufwerk verschlüsseln ..." Style="{StaticResource Sec}"/><Button x:Name="BtnBlKey" Content="Schlüssel auf USB-Stick sichern ..." Style="{StaticResource Sec}"/><Button x:Name="BtnBlSuspend" Content="Für 1 Neustart aussetzen (BIOS-Update)" Style="{StaticResource Sec}"/><Button x:Name="BtnBlResume" Content="Fortsetzen" Style="{StaticResource Sec}"/><Button x:Name="BtnBlOff" Content="Entschlüsseln" Style="{StaticResource Sec}"/><Button x:Name="BtnBlMsSave" Content="Im Microsoft-Konto sichern"/><Button x:Name="BtnBlOnline" Content="Schlüssel im Microsoft-Konto ansehen" Style="{StaticResource Sec}"/></WrapPanel>')) +
+        '<WrapPanel Margin="0,8,0,0"><Button x:Name="BtnBlPdf" Content="Schlüssel als PDF sichern ..." ToolTip="Ausführliche PDF mit Schlüssel, Geräte-Angaben und Anleitung - auf USB-Stick, Cloud-Ordner oder zum Drucken"/><Button x:Name="BtnBlWizard" Content="BitLocker-Assistent ..." ToolTip="Schritt für Schritt: prüfen, verschlüsseln und den Schlüssel an mehreren sicheren Orten ablegen"/><Button x:Name="BtnBlOneClick" Content="C: mit einem Klick verschlüsseln" Style="{StaticResource Sec}" ToolTip="Verschlüsselt das Windows-Laufwerk und legt den Wiederherstellungsschlüssel automatisch im PC-Tools-Ordner ab."/><Button x:Name="BtnBlKeyFolder" Content="Schlüssel-Ordner öffnen" Style="{StaticResource Sec}"/><Button x:Name="BtnBlOn" Content="Anderes Laufwerk verschlüsseln ..." Style="{StaticResource Sec}"/><Button x:Name="BtnBlKey" Content="Schlüssel auf USB-Stick sichern ..." Style="{StaticResource Sec}"/><Button x:Name="BtnBlSuspend" Content="Für 1 Neustart aussetzen (BIOS-Update)" Style="{StaticResource Sec}"/><Button x:Name="BtnBlResume" Content="Fortsetzen" Style="{StaticResource Sec}"/><Button x:Name="BtnBlOff" Content="Entschlüsseln" Style="{StaticResource Sec}"/><Button x:Name="BtnBlMsSave" Content="Im Microsoft-Konto sichern"/><Button x:Name="BtnBlOnline" Content="Schlüssel im Microsoft-Konto ansehen" Style="{StaticResource Sec}"/></WrapPanel>')) +
     (New-Card 'Passwort-Check' @(
         '<TextBlock Text="Prüft, ob Passwörter in bekannten Datenlecks auftauchen (Have I Been Pwned). Das Passwort verlässt den PC nie: nur die ersten 5 Zeichen seines SHA-1-Fingerabdrucks werden abgefragt, der Vergleich passiert hier auf dem PC." Foreground="#6B7890" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>',
         '<WrapPanel><TextBlock Text="Ein Passwort prüfen:" VerticalAlignment="Center" Margin="0,0,8,8" Foreground="#1F2A44"/><PasswordBox x:Name="PwOne" Width="260" Padding="4,5" Margin="0,0,8,8" VerticalAlignment="Center"/><Button x:Name="BtnPwOne" Content="Prüfen"/><TextBlock x:Name="PwOneInfo" Text="" VerticalAlignment="Center" FontWeight="SemiBold" Margin="4,0,0,8" TextWrapping="Wrap" MaxWidth="520"/></WrapPanel>',
@@ -22108,6 +22108,7 @@ $pageSecurity = New-Page 'Sicherheit' 'Alle Schutzfunktionen dieses PCs auf eine
 
 # ---------------------------------------------------------------- Handbuch (wird mit jeder Version gepflegt)
 $ManualNews = @(
+    'Version 14.5: BitLocker-Schlüssel als PDF - Seite Sicherheit > "Schlüssel als PDF sichern". Die PDF enthält alle Angaben zum PC (Modell, Seriennummer, Windows, BIOS, Secure Boot, TPM), für jedes verschlüsselte Laufwerk Schlüssel-ID, Kurzkennung und den 48-stelligen Schlüssel groß lesbar, eine Anleitung zur Eingabe und Tipps zur Aufbewahrung. Speichern mit einem Klick auf USB-Stick, in Cloud-Ordner (OneDrive, Google Drive, Dropbox, Nextcloud, iCloud - werden automatisch gefunden) oder einen anderen Ordner/NAS, jede Kopie wird geprüft. Der BitLocker-Assistent legt die PDF jetzt automatisch neben jede Schlüsseldatei und öffnet sie zum Drucken.',
     'Version 14.4: BitLocker wird jetzt überwacht - rote Warnung, wenn BitLocker dauerhaft ausgesetzt ist (Daten ungeschützt) oder nur noch der Wiederherstellungsschlüssel übrig ist (Abfrage bei jedem Start). Der BitLocker-Assistent repariert das mit einem Klick: zuerst über den TPM-Chip - geht das wegen eines BIOS-Fehlers nicht, mit einem Start-Passwort. Läuft BitLocker mit Start-Passwort, achtet PC-Tools auf ein neues BIOS (bei Lenovo direkt im Hersteller-Katalog) und gibt Bescheid, sobald sich der TPM-Schutz erneut lohnt.',
     'Version 14.3.4: Ändert PC-Tools im BIOS Secure Boot, TPM oder den Startmodus, wird BitLocker vorher automatisch für 2 Neustarts ausgesetzt - so fragt Windows danach nicht mehr nach dem Wiederherstellungsschlüssel. Der Hinweis bei "Punkte beheben" zu Secure Boot erklärt das jetzt auch für Änderungen direkt im BIOS-Menü.',
     'Version 14.3.3: Updates kommen jetzt auch ohne bzw. mit einem alten GitHub-Token an (öffentliches Repository). KI mit Ollama: Ist das gewählte Modell nicht geladen, nimmt PC-Tools automatisch ein vorhandenes oder lädt es selbst.',
@@ -43407,7 +43408,7 @@ function Show-BlWizard {
     <Border Background="White" CornerRadius="10" Padding="12,10" Margin="0,6,0,14" BorderBrush="#E2E7F0" BorderThickness="1">
       <StackPanel>
         <WrapPanel><CheckBox x:Name="WzUsb" Content="USB-Stick:" VerticalAlignment="Center" Width="170" Margin="0,4"/><ComboBox x:Name="WzUsbList" Uid="notr" Width="300" Margin="0,4,8,4"/><Button x:Name="WzUsbRefresh" Content="Neu suchen" Padding="10,4" Margin="0,4"/></WrapPanel>
-        <WrapPanel><CheckBox x:Name="WzDir" Content="Ordner / NAS:" VerticalAlignment="Center" Width="170" Margin="0,4"/><TextBox x:Name="WzDirPath" Width="300" Padding="4,3" Margin="0,4,8,4"/><Button x:Name="WzDirPick" Content="Durchsuchen ..." Padding="10,4" Margin="0,4"/></WrapPanel>
+        <WrapPanel><CheckBox x:Name="WzDir" Content="Cloud / Ordner / NAS:" VerticalAlignment="Center" Width="170" Margin="0,4"/><TextBox x:Name="WzDirPath" Width="300" Padding="4,3" Margin="0,4,8,4"/><Button x:Name="WzDirPick" Content="Durchsuchen ..." Padding="10,4" Margin="0,4"/></WrapPanel>
         <CheckBox x:Name="WzMs" Content="Microsoft-Konto bzw. Firmenkonto (Entra/AD)" Margin="0,6,0,0"/>
         <CheckBox x:Name="WzPrint" Content="Ausdrucken (Zettel gut wegschließen)" Margin="0,6,0,0"/>
         <CheckBox x:Name="WzVault" Content="Lizenz-Tresor von PC-Tools (verschlüsselt, zusätzlich)" Margin="0,6,0,0"/>
@@ -43441,6 +43442,7 @@ function Show-BlWizard {
     $script:BlWzUsb = { $l = $script:BlWz.WzUsbList; $l.Items.Clear(); foreach ($u in (Get-BlUsbDrives)) { [void]$l.Items.Add($u) }; if ($l.Items.Count) { $l.SelectedIndex = 0; $script:BlWz.WzUsb.IsChecked = $true } else { [void]$l.Items.Add((T 'kein USB-Stick gefunden - einstecken und "Neu suchen"')); $l.SelectedIndex = 0; $script:BlWz.WzUsb.IsChecked = $false } }
     & $script:BlWzFill; & $script:BlWzUsb
     $script:BlWz.WzMs.IsChecked = $true
+    try { $cl = @(Get-BlKeyTargets | Where-Object { $_.Kind -eq 'Cloud' })[0]; if ($cl -and -not $script:BlWz.WzDirPath.Text) { $script:BlWz.WzDirPath.Text = $cl.Path } } catch { }
     $script:BlWz.WzUsbRefresh.Add_Click({ & $script:BlWzUsb })
     $script:BlWz.WzDirPick.Add_Click({ Select-FolderInto $script:BlWz.WzDirPath; if ($script:BlWz.WzDirPath.Text.Trim()) { $script:BlWz.WzDir.IsChecked = $true } })
     $script:BlWz.WzClose.Add_Click({ $script:BlWz.Win.Close() })
@@ -43481,12 +43483,15 @@ function Invoke-BlWizardRun {
         if (-not $k) { throw 'Es gibt keinen Wiederherstellungsschlüssel für ' + $mp }
         $name = 'BitLocker-Schluessel_{0}_{1}.txt' -f $env:COMPUTERNAME, ($mp -replace '[:\\]', '')
         $first = [string]$k.Keys[0].RecoveryPassword
+        $pdfLocal = ''; try { $pdfLocal = Join-Path (Get-BlKeyFolder) ('BitLocker-Schlüssel_{0}_{1:yyyy-MM-dd}.pdf' -f $env:COMPUTERNAME, (Get-Date)); New-Item (Get-BlKeyFolder) -ItemType Directory -Force | Out-Null; New-BlKeyPdf (Get-BlKeyReport) $pdfLocal } catch { $pdfLocal = ''; $log.Add('! PDF konnte nicht erstellt werden: ' + $_.Exception.Message) }
         $write = { param($folder, $label)
             try { Connect-BackupTarget $folder } catch { }
             New-Item $folder -ItemType Directory -Force -ErrorAction Stop | Out-Null
             $f = Join-Path $folder $name; Set-Content -LiteralPath $f -Value $k.Lines -Encoding UTF8 -ErrorAction Stop
             if ((Get-Content -LiteralPath $f -Raw -Encoding UTF8) -notmatch [regex]::Escape($first)) { throw 'Kontrolle fehlgeschlagen' }
-            $log.Add(('✓ {0}: {1} (gespeichert und geprüft)' -f $label, $f)); return $f }
+            $pdfNote = ''
+            if ($pdfLocal -and (Test-Path -LiteralPath $pdfLocal)) { $pd = Join-Path $folder ([IO.Path]::GetFileName($pdfLocal)); if ($pd -ne $pdfLocal) { Copy-Item -LiteralPath $pdfLocal -Destination $pd -Force -ErrorAction Stop; if ((Get-FileHash -LiteralPath $pd).Hash -ne (Get-FileHash -LiteralPath $pdfLocal).Hash) { throw 'PDF-Kontrolle fehlgeschlagen' } }; $pdfNote = ' + PDF' }
+            $log.Add(('✓ {0}: {1}{2} (gespeichert und geprüft)' -f $label, $f, $pdfNote)); return $f }
         $local = ''; try { $local = & $write (Get-BlKeyFolder) 'PC-Tools-Ordner'; Write-BlKeyInfo (Get-BlKeyFolder) } catch { $log.Add('✗ PC-Tools-Ordner: ' + $_.Exception.Message) }
         if ($usb) { try { $null = & $write $usb 'USB-Stick' } catch { $log.Add('✗ USB-Stick: ' + $_.Exception.Message) } }
         if ($dir) { try { $null = & $write $dir 'Ordner' } catch { $log.Add('✗ Ordner: ' + $_.Exception.Message) } }
@@ -43498,13 +43503,272 @@ function Invoke-BlWizardRun {
             if ($ok) { $log.Add('✓ Firmen-/Schulkonto (Entra/AD)') }
             else { $log.Add('! Microsoft-Konto: in den BitLocker-Einstellungen bei ' + $mp + ' auf "Wiederherstellungsschlüssel sichern" > "In Microsoft-Konto speichern" klicken (wird geöffnet). Prüfen: account.microsoft.com/devices/recoverykey'); try { Start-Process 'control.exe' '/name Microsoft.BitLockerDriveEncryption' } catch { } }
         }
-        if ($z.WzPrint.IsChecked -and $local) { try { Start-Process 'notepad.exe' -ArgumentList '/p', ('"{0}"' -f $local); $log.Add('✓ Druck gestartet (Standarddrucker)') } catch { $log.Add('✗ Drucken: ' + $_.Exception.Message) } }
+        if ($z.WzPrint.IsChecked) {
+            if ($pdfLocal -and (Test-Path -LiteralPath $pdfLocal)) { try { Start-Process -FilePath $pdfLocal; $log.Add('✓ PDF zum Drucken geöffnet (Drucken mit Strg+P)') } catch { $log.Add('✗ PDF öffnen: ' + $_.Exception.Message) } }
+            elseif ($local) { try { Start-Process 'notepad.exe' -ArgumentList '/p', ('"{0}"' -f $local); $log.Add('✓ Druck gestartet (Standarddrucker)') } catch { $log.Add('✗ Drucken: ' + $_.Exception.Message) } }
+        }
         $z.WzState.Text = ($log -join "`n")
         $z.WzProg.Visibility = 'Visible'; $script:BlWzTimer.Start()
         $ui.StatusText.Text = 'BitLocker-Assistent: fertig.'
     } catch { $z.WzState.Text = (($log + @('✗ ' + $_.Exception.Message)) -join "`n") }
     finally { $z.Win.Cursor = $null; $z.WzGo.IsEnabled = $true; $z.WzGo.Content = 'Schlüssel jetzt sichern' }
 }
+# ---- BitLocker-Schlüssel als PDF (14.5)
+# ---- Einfacher PDF-Erzeuger (ohne Zusatzprogramme): A4, Helvetica/Courier, WinAnsi (Umlaute), Umbruch, Kästen, mehrere Seiten
+function New-SimplePdf([string]$Path, [object[]]$Blocks, [string]$Footer = '', [string]$Title = '') {
+    $enc = [Text.Encoding]::GetEncoding(1252)
+    $W = 595.0; $H = 842.0; $ml = 50.0; $mr = 50.0; $top = 790.0; $bottom = 60.0; $cw = $W - $ml - $mr
+    $inv = [Globalization.CultureInfo]::InvariantCulture
+    $f = { param([double]$v) $v.ToString('0.##', $inv) }
+    $esc = { param([string]$t) ($t -replace '\\', '\\' -replace '\(', '\(' -replace '\)', '\)') -replace "[`r`n`t]", ' ' }
+    $tw = { param([string]$t, [double]$size, [bool]$mono)
+        if ($mono) { return $t.Length * 0.6 * $size }
+        $w = 0.0
+        foreach ($ch in $t.ToCharArray()) {
+            if ('il.,;:''!|ftj ()[]'.IndexOf($ch) -ge 0) { $w += 0.30 } elseif ('mwMW@%'.IndexOf($ch) -ge 0) { $w += 0.85 } elseif ([char]::IsUpper($ch) -or [char]::IsDigit($ch)) { $w += 0.64 } else { $w += 0.54 }
+        }
+        return $w * $size
+    }
+    $wrap = { param([string]$t, [double]$size, [double]$width, [bool]$mono)
+        $out = [System.Collections.Generic.List[string]]::new()
+        foreach ($para in ([string]$t -split "`r?`n")) {
+            $line = ''
+            foreach ($word in ($para -split ' ')) {
+                $try = $(if ($line) { $line + ' ' + $word } else { $word })
+                if ((& $tw $try $size $mono) -le $width -or -not $line) { $line = $try } else { $out.Add($line); $line = $word }
+            }
+            $out.Add($line)
+        }
+        return , $out.ToArray()
+    }
+    $pages = [System.Collections.Generic.List[object]]::new()
+    $ops = [System.Text.StringBuilder]::new(); $st = @{ Y = $top }
+    $newPage = { $pages.Add($ops.ToString()); [void]$ops.Clear(); $st.Y = $top }
+    $need = { param([double]$h) if ($st.Y - $h -lt $bottom) { & $newPage } }
+    $text = { param([string]$font, [double]$size, [double]$x, [double]$yy, [string]$t, [string]$rgb = '0.12 0.16 0.27')
+        [void]$ops.AppendLine(('BT /{0} {1} Tf {2} rg {3} {4} Td ({5}) Tj ET' -f $font, (& $f $size), $rgb, (& $f $x), (& $f $yy), (& $esc $t))) }
+    foreach ($b in @($Blocks)) {
+        if (-not $b) { continue }
+        switch ([string]$b.T) {
+            'h1' {
+                & $need 40
+                & $text 'F2' 20 $ml ($st.Y - 20) ([string]$b.Text) '0.11 0.31 0.65'; $st.Y -= 30
+                if ($b.Sub) { & $text 'F1' 10.5 $ml ($st.Y - 10) ([string]$b.Sub) '0.40 0.45 0.55'; $st.Y -= 18 }
+                [void]$ops.AppendLine(('0.11 0.31 0.65 RG 1.5 w {0} {1} m {2} {1} l S' -f (& $f $ml), (& $f $st.Y), (& $f ($W - $mr)))); $st.Y -= 14
+            }
+            'h2' {
+                & $need 34
+                $st.Y -= 6; & $text 'F2' 13 $ml ($st.Y - 13) ([string]$b.Text) '0.11 0.31 0.65'; $st.Y -= 18
+                [void]$ops.AppendLine(('0.80 0.84 0.90 RG 0.6 w {0} {1} m {2} {1} l S' -f (& $f $ml), (& $f $st.Y), (& $f ($W - $mr)))); $st.Y -= 8
+            }
+            'p' {
+                $sz = $(if ($b.Size) { [double]$b.Size } else { 10.5 }); $font = $(if ($b.Bold) { 'F2' } else { 'F1' }); $ind = $(if ($b.Indent) { [double]$b.Indent } else { 0 })
+                $col = $(if ($b.Color) { [string]$b.Color } else { '0.12 0.16 0.27' })
+                foreach ($ln in (& $wrap ([string]$b.Text) $sz ($cw - $ind) $false)) { & $need ($sz + 4); & $text $font $sz ($ml + $ind) ($st.Y - $sz) $ln $col; $st.Y -= ($sz + 4) }
+                $st.Y -= 3
+            }
+            'li' {
+                $sz = 10.5; $first = $true
+                foreach ($ln in (& $wrap ([string]$b.Text) $sz ($cw - 16) $false)) { & $need ($sz + 4); if ($first) { & $text 'F1' $sz ($ml + 4) ($st.Y - $sz) '-' }; & $text 'F1' $sz ($ml + 16) ($st.Y - $sz) $ln; $st.Y -= ($sz + 4); $first = $false }
+                $st.Y -= 2
+            }
+            'kv' {
+                $sz = 10; $lw = 150.0
+                $vl = & $wrap ([string]$b.Value) $sz ($cw - $lw) $false
+                & $need (($sz + 4) * [math]::Max(1, $vl.Count))
+                & $text 'F2' $sz $ml ($st.Y - $sz) ([string]$b.Key) '0.40 0.45 0.55'
+                foreach ($ln in $vl) { & $text 'F1' $sz ($ml + $lw) ($st.Y - $sz) $ln; $st.Y -= ($sz + 4) }
+            }
+            'key' {
+                $kt0 = [string]$b.Text; $sz = [math]::Min(15.0, ($cw - 24) / [math]::Max(1, $kt0.Length * 0.6)); $bh = 34.0; & $need ($bh + 8)
+                [void]$ops.AppendLine(('0.93 0.95 0.99 rg 0.11 0.31 0.65 RG 1 w {0} {1} {2} {3} re B' -f (& $f $ml), (& $f ($st.Y - $bh)), (& $f $cw), (& $f $bh)))
+                $kt = [string]$b.Text; $kw = & $tw $kt $sz $true
+                & $text 'F3' $sz ($ml + [math]::Max(8, ($cw - $kw) / 2)) ($st.Y - 22) $kt '0.05 0.10 0.25'; $st.Y -= ($bh + 8)
+            }
+            'box' {
+                $sz = 10.5; $pad = 9.0
+                $fill = $(if ($b.Fill) { [string]$b.Fill } else { '1 0.95 0.86' }); $stroke = $(if ($b.Stroke) { [string]$b.Stroke } else { '0.85 0.47 0.04' })
+                $ls = & $wrap ([string]$b.Text) $sz ($cw - 2 * $pad) $false
+                $bh = $ls.Count * ($sz + 4) + 2 * $pad - 4; & $need ($bh + 8)
+                [void]$ops.AppendLine(('{4} rg {5} RG 1 w {0} {1} {2} {3} re B' -f (& $f $ml), (& $f ($st.Y - $bh)), (& $f $cw), (& $f $bh), $fill, $stroke))
+                $yy = $st.Y - $pad
+                foreach ($ln in $ls) { & $text 'F2' $sz ($ml + $pad) ($yy - $sz + 2) $ln '0.25 0.15 0.05'; $yy -= ($sz + 4) }
+                $st.Y -= ($bh + 10)
+            }
+            'space' { $st.Y -= $(if ($b.H) { [double]$b.H } else { 8 }) }
+            'page' { & $newPage }
+        }
+    }
+    $pages.Add($ops.ToString())
+    # PDF zusammensetzen
+    $objs = [System.Collections.Generic.List[string]]::new()
+    $objs.Add('<< /Type /Catalog /Pages 2 0 R >>')
+    $objs.Add('PAGES')
+    $objs.Add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>')
+    $objs.Add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>')
+    $objs.Add('<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >>')
+    $kids = @(); $n = $pages.Count
+    for ($i = 0; $i -lt $n; $i++) {
+        $c = [string]$pages[$i]
+        if ($Footer -or $n -gt 1) {
+            $ft = ('{0}   ·   Seite {1} von {2}' -f $Footer, ($i + 1), $n).Trim(' ', '·')
+            $c += ('0.80 0.84 0.90 RG 0.6 w {0} 45 m {1} 45 l S' -f (& $f $ml), (& $f ($W - $mr))) + "`n"
+            $c += ('BT /F1 8 Tf 0.45 0.50 0.60 rg {0} 32 Td ({1}) Tj ET' -f (& $f $ml), (& $esc $ft)) + "`n"
+        }
+        $len = $enc.GetByteCount($c)
+        $objs.Add(('<< /Length {0} >>' -f $len) + "`nstream`n" + $c + "`nendstream")
+        $cid = $objs.Count
+        $objs.Add(('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents {0} 0 R >>' -f $cid))
+        $kids += ('{0} 0 R' -f $objs.Count)
+    }
+    $objs[1] = ('<< /Type /Pages /Kids [{0}] /Count {1} >>' -f ($kids -join ' '), $n)
+    $info = ('<< /Title ({0}) /Producer (PC-Tools) /CreationDate (D:{1}) >>' -f (& $esc $Title), (Get-Date).ToString('yyyyMMddHHmmss'))
+    $objs.Add($info); $infoId = $objs.Count
+    $sb = [System.Text.StringBuilder]::new(); [void]$sb.Append("%PDF-1.4`n%" + [char]0xE2 + [char]0xE3 + [char]0xCF + [char]0xD3 + "`n")
+    $offs = @()
+    for ($i = 0; $i -lt $objs.Count; $i++) { $offs += $enc.GetByteCount($sb.ToString()); [void]$sb.Append(('{0} 0 obj' -f ($i + 1)) + "`n" + $objs[$i] + "`nendobj`n") }
+    $xref = $enc.GetByteCount($sb.ToString())
+    $xh = ('xref' + "`n" + '0 {0}' + "`n" + '0000000000 65535 f ' + "`n") -f ($objs.Count + 1); [void]$sb.Append($xh)
+    foreach ($o in $offs) { [void]$sb.Append(('{0:D10} 00000 n ' -f $o) + "`n") }
+    $trl = ('trailer' + "`n" + '<< /Size {0} /Root 1 0 R /Info {1} 0 R >>' + "`n" + 'startxref' + "`n" + '{2}' + "`n" + '%%EOF' + "`n") -f ($objs.Count + 1), $infoId, $xref; [void]$sb.Append($trl)
+    [IO.File]::WriteAllBytes($Path, $enc.GetBytes($sb.ToString()))
+}
+# Alle Angaben für den Schlüssel-Ausdruck sammeln (alle verschlüsselten Laufwerke)
+function Get-BlKeyReport {
+    $cs = Get-CimInstance Win32_ComputerSystem; $bios = Get-CimInstance Win32_BIOS; $os = Get-CimInstance Win32_OperatingSystem
+    $reg = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+    $sb = $null; try { $sb = Confirm-SecureBootUEFI -ErrorAction Stop } catch { }
+    $tpm = $null; try { $tpm = Get-Tpm -ErrorAction Stop } catch { }
+    $vols = @()
+    foreach ($v in @(Get-BitLockerVolume -ErrorAction Stop | Where-Object { [string]$_.VolumeStatus -ne 'FullyDecrypted' } | Sort-Object MountPoint)) {
+        $label = ''; $size = ''
+        try { $lv = Get-Volume -DriveLetter ([string]$v.MountPoint).TrimEnd(':\')[0] -ErrorAction Stop; $label = [string]$lv.FileSystemLabel; $size = '{0:N0} GB' -f ($lv.Size / 1GB) } catch { }
+        $kinds = @($v.KeyProtector | ForEach-Object { switch ([string]$_.KeyProtectorType) { 'Tpm' { 'TPM-Chip' } 'TpmPin' { 'TPM + PIN' } 'TpmStartupKey' { 'TPM + USB-Startschlüssel' } 'TpmPinStartupKey' { 'TPM + PIN + USB-Schlüssel' } 'Password' { 'Start-Passwort' } 'RecoveryPassword' { 'Wiederherstellungsschlüssel' } 'ExternalKey' { 'USB-Startschlüssel' } 'AdAccountOrGroup' { 'AD-Konto/Gruppe' } default { [string]$_ } } } | Select-Object -Unique)
+        $keys = @($v.KeyProtector | Where-Object { [string]$_.KeyProtectorType -eq 'RecoveryPassword' } | ForEach-Object { [pscustomobject]@{ Id = ([string]$_.KeyProtectorId).Trim('{}'); Key = [string]$_.RecoveryPassword } })
+        $vols += [pscustomobject]@{ Drive = [string]$v.MountPoint; Label = $label; Size = $size; Type = [string]$v.VolumeType; Method = [string]$v.EncryptionMethod; Status = [string]$v.VolumeStatus; Pct = [int]$v.EncryptionPercentage; On = ([string]$v.ProtectionStatus -eq 'On'); Kinds = ($kinds -join ', '); Keys = $keys }
+    }
+    [pscustomobject]@{
+        Computer = $env:COMPUTERNAME; User = [string]$cs.UserName; Maker = [string]$cs.Manufacturer; Model = [string]$cs.Model; Serial = ([string]$bios.SerialNumber).Trim()
+        Bios = ([string]$bios.SMBIOSBIOSVersion).Trim(); Windows = ('{0} {1} (Build {2}.{3})' -f $os.Caption, $reg.DisplayVersion, $reg.CurrentBuild, $reg.UBR)
+        SecureBoot = $(if ($sb -eq $true) { 'an' } elseif ($sb -eq $false) { 'aus' } else { 'unbekannt' }); Tpm = $(if ($tpm -and $tpm.TpmPresent) { ('vorhanden, {0}' -f $(if ($tpm.TpmReady) { 'bereit' } else { 'nicht bereit' })) } else { 'nicht gefunden' })
+        Created = (Get-Date); Version = $AppVersion; Volumes = $vols
+    }
+}
+function New-BlKeyPdf($R, [string]$Path) {
+    $bl = [System.Collections.Generic.List[object]]::new()
+    $B = { param($h) $bl.Add([pscustomobject]$h) }
+    & $B @{ T = 'h1'; Text = 'BitLocker-Wiederherstellungsschlüssel'; Sub = ('{0}  ·  {1} {2}  ·  erstellt am {3:dd.MM.yyyy HH:mm}' -f $R.Computer, $R.Maker, $R.Model, $R.Created) }
+    & $B @{ T = 'box'; Text = 'VERTRAULICH: Mit diesem Schlüssel kann jeder die Daten dieses PCs lesen. Nicht auf dem PC selbst aufbewahren - aber sicher an mindestens zwei Orten (z.B. Ausdruck im Ordner/Tresor und USB-Stick oder Cloud mit Zwei-Faktor-Anmeldung). Ohne Schlüssel sind die Daten nach einem Defekt verloren.' }
+    & $B @{ T = 'h2'; Text = 'Gerät' }
+    foreach ($kv in @(@('Computername', $R.Computer), @('Hersteller / Modell', ('{0} {1}' -f $R.Maker, $R.Model)), @('Seriennummer', $R.Serial), @('Windows', $R.Windows), @('BIOS-Version', $R.Bios), @('Secure Boot', $R.SecureBoot), @('TPM-Chip', $R.Tpm), @('Angemeldet', $R.User), @('Erstellt', ('{0:dd.MM.yyyy HH:mm} mit PC-Tools {1}' -f $R.Created, $R.Version)))) { if ([string]$kv[1]) { & $B @{ T = 'kv'; Key = $kv[0]; Value = [string]$kv[1] } } }
+    foreach ($v in @($R.Volumes)) {
+        & $B @{ T = 'h2'; Text = ('Laufwerk {0}{1}' -f $v.Drive, $(if ($v.Label) { ' (' + $v.Label + ')' } else { '' })) }
+        & $B @{ T = 'kv'; Key = 'Art'; Value = $(if ($v.Type -eq 'OperatingSystem') { 'Windows-Laufwerk' } elseif ($v.Type -eq 'Data') { 'Datenlaufwerk' } else { $v.Type }) }
+        if ($v.Size) { & $B @{ T = 'kv'; Key = 'Größe'; Value = $v.Size } }
+        & $B @{ T = 'kv'; Key = 'Verschlüsselung'; Value = ('{0} - {1} ({2} %)' -f $v.Method, $v.Status, $v.Pct) }
+        & $B @{ T = 'kv'; Key = 'Schutz'; Value = ('{0} - entsperrt durch: {1}' -f $(if ($v.On) { 'aktiv' } else { 'AUSGESETZT' }), $v.Kinds) }
+        if (-not @($v.Keys).Count) { & $B @{ T = 'box'; Text = 'Für dieses Laufwerk gibt es keinen Wiederherstellungsschlüssel. Bitte im BitLocker-Assistenten von PC-Tools einen anlegen lassen.' } }
+        foreach ($k in @($v.Keys)) {
+            & $B @{ T = 'space'; H = 4 }
+            & $B @{ T = 'kv'; Key = 'Schlüssel-ID'; Value = $k.Id }
+            & $B @{ T = 'kv'; Key = 'Kurzkennung'; Value = (($k.Id -split '-')[0] + '  (wird im blauen BitLocker-Bildschirm angezeigt)') }
+            & $B @{ T = 'p'; Text = 'Wiederherstellungsschlüssel (48 Ziffern):'; Bold = $true; Size = 10 }
+            & $B @{ T = 'key'; Text = $k.Key }
+        }
+    }
+    & $B @{ T = 'h2'; Text = 'Wann wird der Schlüssel gebraucht?' }
+    foreach ($t in @('Nach Änderungen im BIOS/UEFI (z.B. Secure Boot, TPM, Startreihenfolge) oder nach einem BIOS-Update ohne vorheriges Aussetzen von BitLocker.', 'Nach einem Hardwaretausch (Mainboard, TPM, Festplatte in anderen PC eingebaut) oder wenn der TPM-Chip zurückgesetzt wurde.', 'Wenn das Start-Passwort bzw. die PIN mehrmals falsch eingegeben oder vergessen wurde.', 'Um die Festplatte an einem anderen PC auszulesen (Datenrettung).')) { & $B @{ T = 'li'; Text = $t } }
+    & $B @{ T = 'h2'; Text = 'So wird er eingegeben' }
+    foreach ($t in @('Im blauen Bildschirm "BitLocker-Wiederherstellung" zuerst die angezeigte Schlüssel-ID mit der Kurzkennung oben vergleichen - nur der passende Schlüssel funktioniert.', 'Die 48 Ziffern eingeben - mit der Zahlenreihe oder den Tasten F1 bis F10 (F10 = 0). Die Bindestriche setzt Windows selbst.', 'Mit der Eingabetaste bestätigen. Windows startet danach normal.', 'Kommt die Abfrage danach bei jedem Start wieder: in Windows den BitLocker-Assistenten von PC-Tools öffnen ("Schutz reparieren") oder in PowerShell als Administrator: Suspend-BitLocker -MountPoint C: -RebootCount 1 und neu starten.', 'Start-Passwort: vor Windows gilt die englische Tastatur - Y und Z sind vertauscht, Sonderzeichen liegen anders.', 'Festplatte an einem anderen Windows-PC entsperren (PowerShell als Administrator, Laufwerksbuchstaben anpassen): manage-bde -unlock E: -RecoveryPassword <48 Ziffern>')) { & $B @{ T = 'li'; Text = $t } }
+    & $B @{ T = 'h2'; Text = 'Sicher aufbewahren - mindestens zwei Orte' }
+    foreach ($t in @('Ausdruck: in einen Ordner mit wichtigen Unterlagen oder einen Tresor legen - nicht in die Laptoptasche.', 'USB-Stick: eigener Stick nur dafür, getrennt vom PC aufbewahren. Am besten zusätzlich mit BitLocker To Go verschlüsseln und das Passwort woanders notieren.', 'Cloud (Google Drive, OneDrive, Dropbox, Nextcloud): nur mit Zwei-Faktor-Anmeldung des Kontos und nicht freigegeben.', 'Passwort-Manager (z.B. Bitwarden, 1Password, KeePass): als sichere Notiz mit Computername und Schlüssel-ID.', 'Microsoft-Konto: Systemsteuerung > BitLocker > "Wiederherstellungsschlüssel sichern" > "In Microsoft-Konto speichern". Abrufbar unter account.microsoft.com/devices/recoverykey (Kurzlink aka.ms/myrecoverykey).', 'Firmen-PCs: der Schlüssel liegt meist zusätzlich bei der IT (Entra ID/Intune bzw. Active Directory).', 'Wird BitLocker neu eingerichtet oder ein neuer Schlüssel erzeugt, diese Seite neu erstellen und alte Kopien vernichten.')) { & $B @{ T = 'li'; Text = $t } }
+    New-SimplePdf -Path $Path -Blocks $bl.ToArray() -Footer ('VERTRAULICH  ·  BitLocker-Schlüssel {0}  ·  PC-Tools {1}' -f $R.Computer, $R.Version) -Title ('BitLocker-Wiederherstellungsschlüssel ' + $R.Computer)
+}
+# Cloud- und USB-Ziele für den Schlüssel finden
+function Get-BlKeyTargets {
+    $t = [System.Collections.Generic.List[object]]::new()
+    foreach ($d in @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=2' -ErrorAction SilentlyContinue)) { $t.Add([pscustomobject]@{ Kind = 'USB-Stick'; Name = ('USB-Stick {0} {1} ({2:N1} GB frei)' -f $d.DeviceID, $(if ($d.VolumeName) { $d.VolumeName } else { '' }), ([double]$d.FreeSpace / 1GB)); Path = ($d.DeviceID + '\BitLocker-Schlüssel') }) }
+    $uh = $env:USERPROFILE
+    $cand = [ordered]@{}
+    foreach ($v in @($env:OneDriveConsumer, $env:OneDrive, $env:OneDriveCommercial)) { if ($v -and (Test-Path -LiteralPath $v)) { $cand[$v] = 'OneDrive' } }
+    foreach ($dl in @(Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) { foreach ($sub in 'Meine Ablage', 'My Drive') { $p = Join-Path $dl.Root $sub; if (Test-Path -LiteralPath $p) { $cand[$p] = 'Google Drive' } } }
+    foreach ($p in @((Join-Path $uh 'Google Drive\Meine Ablage'), (Join-Path $uh 'Google Drive\My Drive'), (Join-Path $uh 'Google Drive'))) { if ((Test-Path -LiteralPath $p) -and -not @($cand.Keys | Where-Object { $cand[$_] -eq 'Google Drive' }).Count) { $cand[$p] = 'Google Drive' } }
+    try { $dj = Join-Path $env:LOCALAPPDATA 'Dropbox\info.json'; if (Test-Path -LiteralPath $dj) { $o = Get-Content -LiteralPath $dj -Raw | ConvertFrom-Json; foreach ($pr in $o.PSObject.Properties) { if ($pr.Value.path -and (Test-Path -LiteralPath $pr.Value.path)) { $cand[[string]$pr.Value.path] = 'Dropbox' } } } } catch { }
+    foreach ($kv in @(@('Dropbox', 'Dropbox'), @('Nextcloud', 'Nextcloud'), @('ownCloud', 'ownCloud'), @('iCloudDrive', 'iCloud Drive'), @('pCloud Drive', 'pCloud'), @('MagentaCLOUD', 'MagentaCLOUD'))) { $p = Join-Path $uh $kv[0]; if ((Test-Path -LiteralPath $p) -and -not $cand.Contains($p)) { $cand[$p] = $kv[1] } }
+    foreach ($p in $cand.Keys) { $t.Add([pscustomobject]@{ Kind = 'Cloud'; Name = ('{0}: {1}' -f $cand[$p], $p); Path = (Join-Path $p 'BitLocker-Schlüssel') }) }
+    return $t.ToArray()
+}
+# Schlüssel-PDF erzeugen und an die gewählten Orte kopieren (mit Kontrolle)
+function Save-BlKeyPdfTo([string]$Pdf, [string[]]$Dirs) {
+    $res = [System.Collections.Generic.List[string]]::new()
+    $h0 = (Get-FileHash -LiteralPath $Pdf -Algorithm SHA256).Hash
+    foreach ($d in @($Dirs | Where-Object { $_ })) {
+        try {
+            try { Connect-BackupTarget $d } catch { }
+            New-Item $d -ItemType Directory -Force -ErrorAction Stop | Out-Null
+            $dst = Join-Path $d ([IO.Path]::GetFileName($Pdf))
+            Copy-Item -LiteralPath $Pdf -Destination $dst -Force -ErrorAction Stop
+            if ((Get-FileHash -LiteralPath $dst -Algorithm SHA256).Hash -ne $h0) { throw 'Kontrolle fehlgeschlagen (Datei weicht ab)' }
+            $res.Add(('✓ {0} (gespeichert und geprüft)' -f $dst))
+        } catch { $res.Add(('✗ {0}: {1}' -f $d, $_.Exception.Message)) }
+    }
+    return $res.ToArray()
+}
+function Show-BlPdfDialog {
+    $r = Get-BlKeyReport
+    if (-not @($r.Volumes).Count) { Show-UiError 'Auf diesem PC ist kein Laufwerk mit BitLocker verschlüsselt - es gibt keinen Schlüssel zu sichern.'; return }
+    if (-not @($r.Volumes | ForEach-Object { $_.Keys }).Count) { Show-UiError 'Es gibt keinen Wiederherstellungsschlüssel. Bitte zuerst den BitLocker-Assistenten ausführen ("Schutz reparieren").'; return }
+    $dir = Get-BlKeyFolder; New-Item $dir -ItemType Directory -Force | Out-Null
+    $pdf = Join-Path $dir ('BitLocker-Schlüssel_{0}_{1:yyyy-MM-dd}.pdf' -f $env:COMPUTERNAME, (Get-Date))
+    New-BlKeyPdf $r $pdf
+    $x = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="PC-Tools - BitLocker-Schlüssel als PDF" Width="700" SizeToContent="Height" WindowStartupLocation="CenterOwner" ResizeMode="NoResize" FontFamily="Segoe UI" FontSize="13.5" Background="#F4F6FA">
+  <StackPanel Margin="22">
+    <TextBlock Text="BitLocker-Schlüssel als PDF" FontSize="21" FontWeight="SemiBold" Foreground="#1F2A44"/>
+    <TextBlock x:Name="BpInfo" TextWrapping="Wrap" Foreground="#475569" Margin="0,6,0,10"/>
+    <Border Background="#FFF7ED" BorderBrush="#F59E0B" BorderThickness="1" CornerRadius="8" Padding="10,8" Margin="0,0,0,12"><TextBlock TextWrapping="Wrap" Foreground="#7C2D12" Text="Mindestens zwei Orte außerhalb des PCs: z.B. Ausdruck in den Ordner mit wichtigen Unterlagen + USB-Stick oder Cloud. Cloud nur mit Zwei-Faktor-Anmeldung des Kontos und ohne Freigabe. Den USB-Stick nicht zusammen mit dem PC aufbewahren."/></Border>
+    <TextBlock Text="Speichern auf:" FontWeight="SemiBold" Foreground="#1F2A44"/>
+    <Border Background="White" CornerRadius="10" Padding="10,8" Margin="0,6,0,8" BorderBrush="#E2E7F0" BorderThickness="1"><StackPanel x:Name="BpTargets"/></Border>
+    <WrapPanel Margin="0,0,0,8"><CheckBox x:Name="BpOther" Content="Anderer Ordner / NAS:" VerticalAlignment="Center" Margin="0,0,8,0"/><TextBox x:Name="BpOtherPath" Width="330" Padding="4,3" Margin="0,0,8,0"/><Button x:Name="BpPick" Content="Durchsuchen ..." Padding="10,4"/><Button x:Name="BpRefresh" Content="USB neu suchen" Padding="10,4" Margin="8,0,0,0"/></WrapPanel>
+    <TextBlock x:Name="BpState" TextWrapping="Wrap" Foreground="#1F2A44" Margin="0,6,0,0"/>
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+      <Button x:Name="BpSave" Content="Speichern" Padding="18,8" Margin="0,0,8,0" IsDefault="True"/>
+      <Button x:Name="BpOpen" Content="PDF öffnen / drucken" Padding="18,8" Margin="0,0,8,0"/>
+      <Button x:Name="BpFolder" Content="Ordner öffnen" Padding="18,8" Margin="0,0,8,0"/>
+      <Button x:Name="BpClose" Content="Schließen" Padding="18,8" IsCancel="True"/>
+    </StackPanel>
+  </StackPanel>
+</Window>
+"@
+    $w = [Windows.Markup.XamlReader]::Parse((Convert-ThemeXaml $x)); try { $w.Owner = $window } catch { }
+    $script:BlPd = @{ Win = $w; Pdf = $pdf }
+    foreach ($n in 'BpInfo', 'BpTargets', 'BpOther', 'BpOtherPath', 'BpPick', 'BpRefresh', 'BpState', 'BpSave', 'BpOpen', 'BpFolder', 'BpClose') { $script:BlPd[$n] = $w.FindName($n) }
+    $nk = @($r.Volumes | ForEach-Object { $_.Keys }).Count
+    $script:BlPd.BpInfo.Text = ('Die PDF enthält alle Angaben zu diesem PC ({0}, Seriennummer {1}), {2} Wiederherstellungsschlüssel für {3} Laufwerk(e), eine Anleitung zur Eingabe und Tipps zur Aufbewahrung. Erstellt: {4}' -f $r.Computer, $r.Serial, $nk, @($r.Volumes).Count, $pdf)
+    $script:BlPdFill = {
+        $p = $script:BlPd.BpTargets; $p.Children.Clear()
+        $tg = @(Get-BlKeyTargets)
+        if (-not $tg.Count) { $tb = New-Object Windows.Controls.TextBlock; $tb.Text = (T 'Kein USB-Stick und kein Cloud-Ordner gefunden - USB-Stick einstecken und "USB neu suchen" klicken, oder unten einen Ordner wählen.'); $tb.TextWrapping = 'Wrap'; $tb.Foreground = New-UiBrush '#6B7890'; [void]$p.Children.Add($tb) }
+        foreach ($t in $tg) { $cb = New-Object Windows.Controls.CheckBox; $cb.Content = $t.Name; $cb.Tag = $t.Path; $cb.Margin = '0,3'; $cb.IsChecked = ($t.Kind -eq 'USB-Stick'); [void]$p.Children.Add($cb) }
+    }
+    & $script:BlPdFill
+    $script:BlPd.BpRefresh.Add_Click({ & $script:BlPdFill })
+    $script:BlPd.BpPick.Add_Click({ Select-FolderInto $script:BlPd.BpOtherPath; if ($script:BlPd.BpOtherPath.Text.Trim()) { $script:BlPd.BpOther.IsChecked = $true } })
+    $script:BlPd.BpOpen.Add_Click({ try { Start-Process -FilePath $script:BlPd.Pdf } catch { Show-UiError ('PDF öffnen: ' + $_.Exception.Message) } })
+    $script:BlPd.BpFolder.Add_Click({ try { Start-Process 'explorer.exe' ('/select,"{0}"' -f $script:BlPd.Pdf) } catch { } })
+    $script:BlPd.BpClose.Add_Click({ $script:BlPd.Win.Close() })
+    $script:BlPd.BpSave.Add_Click({
+        $dirs = @($script:BlPd.BpTargets.Children | Where-Object { $_ -is [Windows.Controls.CheckBox] -and $_.IsChecked } | ForEach-Object { [string]$_.Tag })
+        if ($script:BlPd.BpOther.IsChecked -and $script:BlPd.BpOtherPath.Text.Trim()) { $dirs += $script:BlPd.BpOtherPath.Text.Trim() }
+        if (-not $dirs.Count) { $script:BlPd.BpState.Text = (T 'Bitte mindestens einen Ort ankreuzen - oder "PDF öffnen / drucken".'); return }
+        $script:BlPd.Win.Cursor = 'Wait'
+        try { $script:BlPd.BpState.Text = ((Save-BlKeyPdfTo $script:BlPd.Pdf $dirs) -join "`n") } finally { $script:BlPd.Win.Cursor = $null }
+        $ui.StatusText.Text = 'BitLocker-Schlüssel als PDF gesichert.'
+    })
+    [void]$w.ShowDialog()
+}
+$ui.BtnBlPdf.Add_Click({ try { Show-BlPdfDialog } catch { Show-UiError ('Schlüssel als PDF: ' + $_.Exception.Message) } })
 # ---- BitLocker 14.4: Start-Passwort als Ausweg, wenn der TPM-Chip nicht geht
 function Set-BlPasswordPolicy {
     $k = 'HKLM:\SOFTWARE\Policies\Microsoft\FVE'
