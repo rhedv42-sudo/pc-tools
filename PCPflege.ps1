@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Auto, [switch]$Run, [string]$Parts = '', [switch]$Analyze, [switch]$CheckOnly, [string]$RunId = '', [string]$AppsFile = '', [string]$WingetFile = '', [string]$DirectFile = '', [string]$Monitor = '', [switch]$DeskArrange, [string]$Topology = '', [int]$Delay = 0, [switch]$Silent, [switch]$Install, [string]$JobFile = '', [switch]$Backup, [switch]$FleetPoll, [string]$FirstLogon = '', [switch]$NetDiag, [switch]$TbSync, [switch]$WinRepair, [switch]$NetDeep, [string]$DeepOpts = '', [switch]$FullBackup, [switch]$FullRepair, [switch]$NetDoc, [switch]$Sign, [string]$SignOpts = '', [string]$ChocoFile = '')
 
-$AppVersion = '14.5'
+$AppVersion = '14.6'
 $DefaultUpdateSource = 'github:rhedv42-sudo/pc-tools@stable'
 # Portabel (USB-Stick): Datei portable.txt neben dem Skript -> Einstellungen/Protokolle im Ordner Daten auf dem Stick
 $Script:IsPortable = [bool]($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'portable.txt')))
@@ -1567,7 +1567,7 @@ function Get-DefaultConfig {
         AutoFix = [ordered]@{ Enabled = $true; Below = 85 }
         Help = [ordered]@{ Mail = '' }
         Assistant = [ordered]@{ Provider = ''; Model = ''; CustomUrl = ''; AutoDiag = $true; AutoCloud = $false; Weekly = $true; Speak = $false; SaveChat = $true; Memory = $true; KeyScope = 'Nur mein Windows-Konto'; MonthlyLimit = 0; MaxTokens = 1024; CtxPage = $true; CtxSystem = $false; CtxHealth = $false; CtxLog = $false; CtxSelection = $true; ErrorButton = $true }
-        Integrate = [ordered]@{ MqttEnabled = $false; MqttHost = ''; MqttPort = 1883; MqttUser = ''; MqttTopic = 'pcpflege'; HaEnabled = $false; HaUrl = ''; RmmEnabled = $false; RmmUrl = '' }
+        Integrate = [ordered]@{ MqttEnabled = $false; MqttHost = ''; MqttPort = 1883; MqttUser = ''; MqttTopic = 'pcpflege'; HaEnabled = $false; HaUrl = ''; HaJobs = $false; RmmEnabled = $false; RmmUrl = '' }
         Notify = [ordered]@{ Enabled = $false; Ntfy = ''; HaWebhook = ''; ChatWebhook = ''; OnRed = $true; OnWarn = $true; OnBackup = $true; OnBluescreen = $true; OnRecover = $true }
         Schedule = [ordered]@{
             Enabled = $true; Frequency = 'Wöchentlich'; Day = 'Sonntag'; Time = '03:00'
@@ -4180,32 +4180,79 @@ function Save-BlFallback($O) { try { $O | ConvertTo-Json -Depth 4 | Set-Content 
 function Get-BiosVersionText { try { return ([string](Get-CimInstance Win32_BIOS -ErrorAction Stop).SMBIOSBIOSVersion).Trim() } catch { return '' } }
 function ConvertTo-BiosVersionNumber([string]$T) {
     if ($T -match '\((\d+)\.(\d+)\s*\)') { return [version]('{0}.{1}' -f [int]$Matches[1], [int]$Matches[2]) }
-    if ($T -match '^\s*(\d+)\.(\d+)') { return [version]('{0}.{1}' -f [int]$Matches[1], [int]$Matches[2]) }
+    if ($T -match '(?i)Ver\.?\s*(\d+)\.(\d+)(?:\.(\d+))?') { if ($Matches[3]) { return [version]('{0}.{1}.{2}' -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3]) }; return [version]('{0}.{1}' -f [int]$Matches[1], [int]$Matches[2]) }
+    if ($T -match '^\s*(\d+)\.(\d+)(?:\.(\d+))?(?:\.(\d+))?') { $p = @([int]$Matches[1], [int]$Matches[2]); if ($Matches[3]) { $p += [int]$Matches[3] }; if ($Matches[4]) { $p += [int]$Matches[4] }; return [version]($p -join '.') }
     if ($T -match '^\s*(\d{2})(\d{2})\s*$') { return [version]('{0}.{1}' -f [int]$Matches[1], [int]$Matches[2]) }
     return $null
 }
-# Neuestes BIOS laut Lenovo-Updatekatalog (wie Lenovo System Update); andere Hersteller: $null
-function Get-LenovoBiosLatest {
-    $cs = Get-CimInstance Win32_ComputerSystem
-    if ([string]$cs.Manufacturer -notmatch 'Lenovo') { return $null }
-    $mt = ([string]$cs.Model).Substring(0, [math]::Min(4, ([string]$cs.Model).Length)).ToUpper()
-    $cat = $null
-    foreach ($os in 'Win11', 'Win10') { try { $cat = Get-WebXml ('https://download.lenovo.com/catalog/{0}_{1}.xml' -f $mt, $os); if ($cat) { break } } catch { } }
-    if (-not $cat) { return $null }
+# Neuestes BIOS laut Hersteller-Katalog (Lenovo System Update, HP Image Assistant, Dell Command Update). $null = unbekannt
+function Get-OemBiosLatest {
+    $cs = Get-CimInstance Win32_ComputerSystem; $mk = [string]$cs.Manufacturer
+    $reg = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'; $win11 = [int]$reg.CurrentBuild -ge 22000
     $best = $null
-    foreach ($pk in @($cat.SelectNodes('//package') | Where-Object { ([string]$_.category) -match 'BIOS' })) {
-        $loc = [string]$pk.location; if (-not $loc) { $loc = [string]$pk.SelectSingleNode('location').InnerText }
-        if (-not $loc) { continue }
-        try { $d = Get-WebXml $loc } catch { continue }
-        $root = $d.DocumentElement; if (-not $root) { continue }
-        $title = [string]($root.SelectSingleNode('Title/Desc')).InnerText
-        if ($title -and $title -notmatch 'BIOS') { continue }
-        if ($title -match 'ECP|Embedded Controller|Thunderbolt|Management Engine|ME Firmware') { continue }
-        $vn = ConvertTo-BiosVersionNumber ([string]$root.GetAttribute('version'))
-        if (-not $vn) { continue }
-        if (-not $best -or $vn -gt $best.Version) { $best = [pscustomobject]@{ Version = $vn; Title = $title; Date = [string]($root.SelectSingleNode('ReleaseDate')).InnerText; Url = $loc } }
+    $take = { param($vn, $title, $date, $url, $vendor) if ($vn -and (-not $best -or $vn -gt $best.Version)) { Set-Variable -Name best -Scope 1 -Value ([pscustomobject]@{ Version = $vn; Title = [string]$title; Date = [string]$date; Url = [string]$url; Vendor = $vendor }) } }
+    if ($mk -match 'Lenovo') {
+        $mt = ([string]$cs.Model).Substring(0, [math]::Min(4, ([string]$cs.Model).Length)).ToUpper()
+        $cat = $null
+        foreach ($os in $(if ($win11) { 'Win11', 'Win10' } else { 'Win10' })) { try { $cat = Get-WebXml ('https://download.lenovo.com/catalog/{0}_{1}.xml' -f $mt, $os); if ($cat) { break } } catch { } }
+        if (-not $cat) { return $null }
+        foreach ($pk in @($cat.SelectNodes('//package') | Where-Object { ([string]$_.category) -match 'BIOS' })) {
+            $loc = [string]$pk.location; if (-not $loc) { try { $loc = [string]$pk.SelectSingleNode('location').InnerText } catch { } }
+            if (-not $loc) { continue }
+            try { $d = Get-WebXml $loc } catch { continue }
+            $root = $d.DocumentElement; if (-not $root) { continue }
+            $title = ''; try { $title = [string]($root.SelectSingleNode('Title/Desc')).InnerText } catch { }
+            if ($title -and $title -notmatch 'BIOS') { continue }
+            if ($title -match 'ECP|Embedded Controller|Thunderbolt|Management Engine|ME Firmware') { continue }
+            $rd = ''; try { $rd = [string]($root.SelectSingleNode('ReleaseDate')).InnerText } catch { }
+            & $take (ConvertTo-BiosVersionNumber ([string]$root.GetAttribute('version'))) $title $rd $loc 'Lenovo'
+        }
+        return $best
     }
-    return $best
+    if ($mk -match 'HP|Hewlett') {
+        $hpId = ([string](Get-CimInstance Win32_BaseBoard).Product).Trim().ToUpper()
+        if (-not $hpId) { return $null }
+        $oses = $(if ($win11) { '11.0.25h2', '11.0.24h2', '11.0.23h2', '11.0.22h2' } else { '10.0.22h2', '10.0.21h2' })
+        $x = $null; foreach ($o in $oses) { try { $x = Get-CabXml ('https://hpia.hpcloud.hp.com/ref/{0}/{0}_64_{1}.cab' -f $hpId.ToLower(), $o); if ($x) { break } } catch { } }
+        if (-not $x) { return $null }
+        foreach ($u in @($x.SelectNodes("//*[local-name()='UpdateInfo']"))) {
+            $cat = ''; try { $cat = [string]$u.SelectSingleNode("*[local-name()='Category']").InnerText } catch { }
+            if ($cat -notmatch '^BIOS') { continue }
+            $g = { param($n) try { [string]$u.SelectSingleNode("*[local-name()='$n']").InnerText } catch { '' } }
+            & $take (ConvertTo-BiosVersionNumber (& $g 'Version')) (& $g 'Name') (& $g 'ReleaseDate') (& $g 'Url') 'HP'
+        }
+        return $best
+    }
+    if ($mk -match 'Dell') {
+        $sku = ([string]$cs.SystemSKUNumber).Trim().ToUpper()
+        if (-not $sku) { return $null }
+        $x = Get-CabXml 'https://downloads.dell.com/catalog/CatalogPC.cab'
+        foreach ($sc in @($x.SelectNodes("//*[local-name()='SoftwareComponent']"))) {
+            $ct = $sc.SelectSingleNode("*[local-name()='ComponentType']"); if (-not $ct -or [string]$ct.GetAttribute('value') -ne 'BIOS') { continue }
+            $ids = @($sc.SelectNodes(".//*[local-name()='Model']") | ForEach-Object { ([string]$_.GetAttribute('systemID')).ToUpper() })
+            if ($ids -notcontains $sku) { continue }
+            $nm = ''; try { $nm = [string]$sc.SelectSingleNode(".//*[local-name()='Name']//*[local-name()='Display']").InnerText } catch { }
+            & $take (ConvertTo-BiosVersionNumber ([string]$sc.GetAttribute('vendorVersion'))) $nm ([string]$sc.GetAttribute('releaseDate')) ('https://downloads.dell.com/' + ([string]$sc.GetAttribute('path')).TrimStart('/')) 'Dell'
+        }
+        return $best
+    }
+    return $null
+}
+function Get-BiosCheckFile { Join-Path $DataDir 'bios-pruefung.json' }
+function Read-BiosCheck { $f = Get-BiosCheckFile; if (Test-Path -LiteralPath $f) { try { return (Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { } }; return $null }
+# Höchstens einmal am Tag den Hersteller-Katalog fragen und das Ergebnis merken (für Ampel, Meldung, Meine PCs)
+function Update-BiosCheck([switch]$Force) {
+    $c = Read-BiosCheck
+    if (-not $Force -and $c -and [string]$c.Checked) { try { if (((Get-Date) - [datetime]$c.Checked).TotalHours -lt 20) { return $c } } catch { } }
+    $cur = Get-BiosVersionText; $curN = ConvertTo-BiosVersionNumber $cur
+    $lt = $null; $err = ''; try { $lt = Get-OemBiosLatest } catch { $err = $_.Exception.Message }
+    $o = [pscustomobject]@{ Checked = (Get-Date).ToString('o'); Current = $cur; CurrentNum = [string]$curN; Latest = $(if ($lt) { [string]$lt.Version } else { '' }); Title = $(if ($lt) { $lt.Title } else { '' }); Date = $(if ($lt) { $lt.Date } else { '' }); Url = $(if ($lt) { $lt.Url } else { '' }); Vendor = $(if ($lt) { $lt.Vendor } else { '' }); Newer = [bool]($lt -and $curN -and $lt.Version -gt $curN); Error = $err; Notified = $(if ($c) { [string]$c.Notified } else { '' }) }
+    if ($o.Newer -and $o.Notified -ne $o.Latest) {
+        try { $null = Send-PflegeNotify ('BIOS-Update für {0}' -f $env:COMPUTERNAME) ('{0} hat ein neues BIOS {1} veröffentlicht (installiert: {2}). Installation über das Hersteller-Programm (Lenovo Vantage / HP Support Assistant / Dell Command Update) oder die Support-Seite - PC-Tools setzt BitLocker vor BIOS-Änderungen automatisch aus.' -f $o.Vendor, $o.Latest, $curN) 'Yellow' } catch { }
+        $o.Notified = $o.Latest
+    }
+    try { $o | ConvertTo-Json | Set-Content -LiteralPath (Get-BiosCheckFile) -Encoding UTF8 } catch { }
+    return $o
 }
 # Nach Läufen (max. 1x am Tag): Läuft BitLocker mit Start-Passwort, weil der TPM-Schutz am BIOS scheiterte? Dann auf neues BIOS achten und Bescheid geben.
 function Test-BlBiosUpdate([switch]$Force) {
@@ -4222,10 +4269,11 @@ function Test-BlBiosUpdate([switch]$Force) {
         $msg = ('Das BIOS wurde aktualisiert ({0} -> {1}). Jetzt im BitLocker-Assistenten (Seite Sicherheit) den TPM-Schutz erneut versuchen - klappt es, entfällt das Start-Passwort.' -f $fb.Bios, $cur)
         $key = 'changed:' + $cur
     } else {
-        $lt = $null; try { $lt = Get-LenovoBiosLatest } catch { }
+        $bc = $null; try { $bc = Update-BiosCheck } catch { }
+        $lt = $null; if ($bc -and $bc.Latest) { $lt = [pscustomobject]@{ Version = [version]$bc.Latest } }
         if ($lt -and $curN -and $lt.Version -gt $curN) {
             $fb | Add-Member -NotePropertyName Latest -NotePropertyValue ([string]$lt.Version) -Force
-            $msg = ('Lenovo hat ein neues BIOS {0} veröffentlicht (installiert: {1}). Nach dem Update kann BitLocker evtl. wieder den TPM-Chip nutzen - dann entfällt das Start-Passwort. Installieren über Lenovo Vantage / System Update oder die Lenovo-Supportseite.' -f $lt.Version, $curN)
+            $msg = ('Der Hersteller hat ein neues BIOS {0} veröffentlicht (installiert: {1}). Nach dem Update kann BitLocker evtl. wieder den TPM-Chip nutzen - dann entfällt das Start-Passwort. Installieren über Lenovo Vantage / System Update oder die Lenovo-Supportseite.' -f $lt.Version, $curN)
             $key = 'latest:' + [string]$lt.Version
         }
     }
@@ -4235,6 +4283,31 @@ function Test-BlBiosUpdate([switch]$Force) {
         try { Write-PLog $msg 'WARN' } catch { }
     }
     Save-BlFallback $fb
+}
+# BitLocker-Übersicht für Meine PCs / Home Assistant - ohne Schlüssel, nur Zustand und wo er gesichert wurde
+function Add-BlKeyBackupRecord([string]$Where) {
+    try {
+        $ids = @(); try { $ids = @((Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction Stop).KeyProtector | Where-Object { [string]$_.KeyProtectorType -eq 'RecoveryPassword' } | ForEach-Object { ([string]$_.KeyProtectorId).Trim('{}') }) } catch { }
+        $f = Join-Path $DataDir 'BitLocker-Sicherungen.json'
+        $l = @(); if (Test-Path -LiteralPath $f) { try { $l = @(Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { } }
+        $l = @($l | Where-Object { $_ -and [string]$_.Where -ne $Where }) + @([pscustomobject]@{ Where = $Where; Time = (Get-Date).ToString('o'); KeyIds = $ids })
+        $l | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $f -Encoding UTF8
+    } catch { }
+}
+function Get-BlFleetInfo {
+    $st = $null; try { $st = Get-BlUnlockState } catch { return [pscustomobject]@{ State = 'nicht verfügbar'; Level = ''; Protect = ''; Saved = @(); SavedOk = $false; Text = 'BitLocker nicht verfügbar (z.B. Windows Home)' } }
+    if (-not $st.Encrypted) { return [pscustomobject]@{ State = 'aus'; Level = 'Warn'; Protect = ''; Saved = @(); SavedOk = $false; Text = 'nicht verschlüsselt' } }
+    $prot = @(); if ($st.HasTpm) { $prot += 'TPM' }; if ($st.HasPassword) { $prot += 'Start-Passwort' }; if ($st.Protectors -contains 'ExternalKey') { $prot += 'USB-Schlüssel' }
+    $state = $(if ($st.On -and $st.HasUnlock) { 'an' } elseif ($st.On) { 'nur Wiederherstellungsschlüssel' } elseif ($st.SuspendCount -gt 0) { 'kurz ausgesetzt' } else { 'ausgesetzt' })
+    $ids = @($st.Volume.KeyProtector | Where-Object { [string]$_.KeyProtectorType -eq 'RecoveryPassword' } | ForEach-Object { ([string]$_.KeyProtectorId).Trim('{}') })
+    $saved = [System.Collections.Generic.List[string]]::new()
+    $f = Join-Path $DataDir 'BitLocker-Sicherungen.json'
+    if (Test-Path -LiteralPath $f) { try { foreach ($r in @(Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json)) { if ($r -and @($r.KeyIds | Where-Object { $ids -contains $_ }).Count) { $saved.Add([string]$r.Where) } } } catch { } }
+    try { if (@(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-BitLocker/BitLocker Management'; Id = 845 } -MaxEvents 5 -ErrorAction Stop | Where-Object { $m = [string]$_.Message; @($ids | Where-Object { $m -match [regex]::Escape($_) }).Count -or -not $ids.Count }).Count) { $saved.Add('Microsoft-/Firmenkonto') } } catch { }
+    $ok = ($state -eq 'an') -and $saved.Count -gt 0
+    $lvl = $(if ($state -in 'ausgesetzt', 'nur Wiederherstellungsschlüssel') { 'Error' } elseif (-not $saved.Count -or $state -ne 'an') { 'Warn' } else { '' })
+    $txt = ('{0}{1} · Schlüssel: {2}' -f $state, $(if ($prot.Count) { ' (' + ($prot -join ' + ') + ')' } else { '' }), $(if ($saved.Count) { ($saved | Select-Object -Unique) -join ', ' } else { 'nicht gesichert!' }))
+    [pscustomobject]@{ State = $state; Level = $lvl; Protect = ($prot -join ' + '); Saved = @($saved | Select-Object -Unique); SavedOk = $ok; Text = $txt }
 }
 # ---- Zustand (Ampel), Meine PCs, Benachrichtigungen, Verlauf, Vorher/Nachher (Oberfläche und Hintergrund)
 function Get-HealthItems($a) {
@@ -4291,6 +4364,7 @@ function Get-HealthItems($a) {
             }
         }
     } catch { }
+    try { $bck = Read-BiosCheck; if ($bck -and $bck.Newer -and [string]$bck.Current -eq (Get-BiosVersionText) -and -not @($r | Where-Object { $_.Text -like 'Neues BIOS*' }).Count) { A 'Yellow' ('BIOS-Update verfügbar: {0} (installiert {1})' -f $bck.Latest, $bck.CurrentNum) ('{0} - über Lenovo Vantage / HP Support Assistant / Dell Command Update oder die Support-Seite des Herstellers installieren. Netzteil anschließen; BitLocker setzt PC-Tools bei BIOS-Änderungen über PC-Tools selbst aus.' -f $bck.Title) 'Drivers' 'Treiber' } } catch { }
     # Funktionsupdate-Blocker (schnell: liest nur die letzte Setup-Scan-Datei des letzten Upgrade-Versuchs)
     try {
         $pan = ''
@@ -4337,6 +4411,8 @@ function Write-FleetStatus($Items, [int]$SecScore = -1) {
         IP = ($ip -join ', '); Warranty = $(try { [string](Get-Content (Join-Path $DataDir 'garantie.json') -Raw -Encoding UTF8 | ConvertFrom-Json).End } catch { '' }); Remote = [bool]$cfg.Fleet.Remote
         Akte = $(try { Get-AkFleetInfo } catch { $null })
         FullBackup = $(try { Get-FbFleetInfo } catch { $null })
+        BitLocker = $(try { Get-BlFleetInfo } catch { $null })
+        Bios = $(try { $bq = Read-BiosCheck; if ($bq) { [pscustomobject]@{ Current = [string]$bq.CurrentNum; Latest = [string]$bq.Latest; Newer = [bool]$bq.Newer } } else { $null } } catch { $null })
     } | ForEach-Object { Add-FdStatusFields $_ $old $dir $SecScore } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath ($f + '.tmp') -Encoding UTF8
     Move-Item -LiteralPath ($f + '.tmp') -Destination $f -Force
 }
@@ -4404,6 +4480,7 @@ function Send-HelpRequest($R) {
         $notified = [bool]@($nr | Where-Object { $_ -match ': OK$' }).Count
         foreach ($x in $nr) { $res.Add([string]$x) }
     } catch { }
+    try { $ic = (Read-PflegeConfig).Integrate; if ($ic.HaEnabled -or $ic.MqttEnabled) { foreach ($x in @(Send-Integrations)) { $res.Add([string]$x) } } } catch { }
     [pscustomobject]@{ TxtFile = $txt; Fleet = $fleet; Notified = $notified; Results = $res.ToArray(); Text = (Format-HelpReportText $R) }
 }
 function Read-FdHelpRequests([string]$Dir) {
@@ -4504,6 +4581,7 @@ function Invoke-AfterRun {
     try { Invoke-NotifyCheck $items $run } catch { }
     try { Send-Integrations | Out-Null } catch { }
     if ($Script:IsAuto) { try { Invoke-AutoFix } catch { } }
+    try { $null = Update-BiosCheck } catch { }
     try { Test-BlBiosUpdate } catch { }
 }
 function Get-BootTimes {
@@ -6078,7 +6156,63 @@ function Get-PcStatus {
         windows = ('{0} {1} ({2}.{3})' -f $os.Caption, $reg.DisplayVersion, $reg.CurrentBuild, $reg.UBR); model = ('{0} {1}' -f $cs.Manufacturer, $cs.Model); version = $AppVersion
         warranty_end = $(if ($war) { [string]$war.End } else { '' }); reboot_pending = [bool](Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')
         user = [string]$cs.UserName; time = (Get-Date).ToString('o')
+        score = $(try { $scx = @(Import-Csv (Join-Path $DataDir 'Score.csv') -Delimiter ';' -ErrorAction Stop | Select-Object -Last 1)[0]; if ($scx) { [int]$scx.Score } else { -1 } } catch { -1 })
+        bitlocker = $(try { (Get-BlFleetInfo).Text } catch { '' }); bitlocker_level = $(try { (Get-BlFleetInfo).Level } catch { '' })
+        bios = $(try { $bq = Read-BiosCheck; if ($bq) { if ($bq.Newer) { ('{0} (neu: {1})' -f $bq.CurrentNum, $bq.Latest) } else { [string]$bq.CurrentNum } } else { '' } } catch { '' })
+        help = $(try { Get-HaHelpInfo } catch { $null })
+        jobs_enabled = [bool](Read-PflegeConfig).Integrate.HaJobs; jobs = @('Status', 'Pflege', 'Updates', 'Aufraeumen', 'Virenscan', 'Sicherung', 'Selbstupdate')
     }
+}
+function Get-HaHelpInfo {
+    $f = @(Get-ChildItem -LiteralPath (Join-Path $DataDir 'Hilfe') -Filter 'Hilfe_*.json' -File -ErrorAction SilentlyContinue | Sort-Object Name | Select-Object -Last 1)[0]
+    if (-not $f) { return $null }
+    $o = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+    $done = $false; try { $done = ((Get-Date) - [datetime]$o.Time).TotalDays -gt 3 -or [string]$o.Status -eq 'erledigt' } catch { }
+    if ($done) { return $null }
+    $txt = ''; try { $txt = Format-HelpReportText $o; if ($txt.Length -gt 6000) { $txt = $txt.Substring(0, 6000) + ' ...' } } catch { }
+    [pscustomobject]@{ open = $true; time = [string]$o.Time; message = [string]$o.Message; problems = @(@($o.Items) | Where-Object { $_ } | Select-Object -First 8 | ForEach-Object { [string]$_.Text }); report = $txt }
+}
+# Aufträge aus Home Assistant (Android-App): sensor.pcpflege_<pc>_auftrag = Aktion, attributes.id = eindeutige Kennung
+function Invoke-HaJobPoll {
+    $cfg = Read-PflegeConfig; $c = $cfg.Integrate
+    if (-not ($c.HaEnabled -and $c.HaUrl -and $c.HaJobs)) { return }
+    $sec = Get-IntegrationSecrets; if (-not $sec.HaToken) { return }
+    $h = @{ Authorization = 'Bearer ' + $sec.HaToken }; $u = ([string]$c.HaUrl).TrimEnd('/')
+    $pc = ($env:COMPUTERNAME.ToLower() -replace '[^a-z0-9_]', '_')
+    $ent = 'sensor.pcpflege_{0}_auftrag' -f $pc
+    $j = $null; try { $j = Invoke-RestMethod -Uri ('{0}/api/states/{1}' -f $u, $ent) -Headers $h -TimeoutSec 15 -ErrorAction Stop } catch { return }
+    $act = [string]$j.state; $id = [string]$j.attributes.id
+    if (-not $id -or $act -in '', 'unknown', 'erledigt', 'Fehler', 'läuft', 'abgelehnt') { return }
+    $doneF = Join-Path $DataDir 'ha-auftraege.txt'
+    $seen = @(); if (Test-Path -LiteralPath $doneF) { $seen = @(Get-Content -LiteralPath $doneF -ErrorAction SilentlyContinue) }
+    if ($seen -contains $id) { return }
+    Add-Content -LiteralPath $doneF -Value $id -Encoding UTF8
+    $post = { param($state, $msg) try { $b = @{ state = $state; attributes = @{ id = $id; action = $act; message = $msg; time = (Get-Date).ToString('o'); friendly_name = ('{0} Auftrag' -f $env:COMPUTERNAME); icon = 'mdi:clipboard-play' } } | ConvertTo-Json -Depth 3; Invoke-RestMethod -Uri ('{0}/api/states/{1}' -f $u, $ent) -Method Post -Headers $h -Body ([Text.Encoding]::UTF8.GetBytes($b)) -ContentType 'application/json; charset=utf-8' -TimeoutSec 15 | Out-Null } catch { } }
+    $ok = @('Status', 'Pflege', 'Updates', 'Aufraeumen', 'Virenscan', 'Sicherung', 'Selbstupdate')
+    $age = 0; try { $age = ((Get-Date) - [datetime]$j.attributes.time).TotalHours } catch { }
+    if ($ok -notcontains $act) { & $post 'abgelehnt' ('Aktion nicht erlaubt: ' + $act); return }
+    if ($age -gt 24) { & $post 'abgelehnt' 'Auftrag älter als 24 Stunden'; return }
+    & $post 'läuft' ''
+    try { Add-Content (Join-Path (Join-Path $DataDir 'Logs') 'Fernauftraege.log') ('{0:yyyy-MM-dd HH:mm} Home Assistant: {1} ({2}) von {3}' -f (Get-Date), $act, $id, [string]$j.attributes.by) -Encoding UTF8 } catch { }
+    $msg = ''
+    try {
+        $parts = switch ($act) { 'Pflege' { @('Update', 'Clean', 'Optimize') } 'Updates' { @('Update') } 'Aufraeumen' { @('Clean') } 'Sicherung' { @('Backup') } 'Virenscan' { @('DefenderScan') } default { @() } }
+        if ($parts.Count) {
+            . ([scriptblock]::Create($EngineText))
+            $Script:ScriptDir = $PSScriptRoot; $Script:IsAuto = $true; $Script:JobOpts = $null
+            if ($act -eq 'Virenscan') { $Script:JobOpts = [pscustomobject]@{ ScanType = 'Quick' } }
+            $lf = Join-Path (Join-Path $DataDir 'Logs') ('HA-Auftrag_{0}.log' -f ($id -replace '[^\w-]', '_'))
+            $lk = Enter-PflegeLock 120; if ($lk -eq $false) { throw 'Eine andere PC-Tools-Aufgabe lief zu lange.' }
+            try { Invoke-PflegeRun -Config $cfg -Parts $parts -LogFile $lf } finally { Exit-PflegeLock $lk }
+            $lr = $null; try { $lr = Get-Content (Join-Path $DataDir 'lastrun.json') -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
+            $msg = $(if ($lr) { 'Dauer {0}, Warnungen {1}, Updates {2}, frei {3}{4}' -f $lr.Dauer, $lr.Warnungen, $lr.Updates, $lr.Freigegeben, $(if ($lr.Neustart) { ', Neustart nötig' }) } else { 'fertig' })
+            try { Invoke-AfterRun } catch { }
+        }
+        if ($act -eq 'Status') { try { Invoke-AfterRun } catch { }; $msg = 'Zustand gemeldet' }
+        if ($act -eq 'Selbstupdate') { $man = Get-UpdateManifest $cfg.Settings.UpdateSource; if ($man -and (Test-NewerVersion $man.Version $AppVersion)) { Install-PflegeUpdate $cfg.Settings.UpdateSource $man; $msg = 'aktualisiert auf ' + $man.Version } else { $msg = 'schon aktuell (' + $AppVersion + ')' } }
+        & $post 'erledigt' $msg
+    } catch { & $post 'Fehler' $_.Exception.Message }
+    try { Send-Integrations | Out-Null } catch { }
 }
 function Send-Integrations([switch]$Test) {
     $cfg = Read-PflegeConfig; $c = $cfg.Integrate; $sec = Get-IntegrationSecrets
@@ -20909,6 +21043,7 @@ if ($NetDoc) {
 }
 # ---- Fernaufträge von "Meine PCs" (Aufgabe als SYSTEM alle 10 Minuten)
 if ($FleetPoll) {
+    try { Invoke-HaJobPoll } catch { try { Add-Content (Join-Path (Join-Path $DataDir 'Logs') 'Fernauftraege.log') ('{0:yyyy-MM-dd HH:mm} Home Assistant: {1}' -f (Get-Date), $_.Exception.Message) -Encoding UTF8 } catch { } }
     try { Invoke-FleetPoll } catch { try { Add-Content (Join-Path (Join-Path $DataDir 'Logs') 'Fernauftraege.log') ('{0:yyyy-MM-dd HH:mm} {1}' -f (Get-Date), $_.Exception.Message) -Encoding UTF8 } catch { } }
     try { Send-Integrations | Out-Null } catch { }
     return
@@ -22108,6 +22243,7 @@ $pageSecurity = New-Page 'Sicherheit' 'Alle Schutzfunktionen dieses PCs auf eine
 
 # ---------------------------------------------------------------- Handbuch (wird mit jeder Version gepflegt)
 $ManualNews = @(
+    'Version 14.6: Neu: Was-ist-neu-Fenster nach jedem Update - zeigt alles, was seit deiner letzten Version dazugekommen ist. Neu: BIOS-Prüfung für Lenovo, HP und Dell - PC-Tools fragt einmal am Tag den Katalog des Herstellers, zeigt ein neues BIOS in der Ampel und meldet es. Neu in Meine PCs: Spalte BitLocker - ist BitLocker an, wie geschützt (TPM/Start-Passwort) und wo ist der Schlüssel gesichert (USB, Cloud, Ausdruck, Microsoft-Konto ...). Der Schlüssel selbst wird nie übertragen. Neu: Home Assistant bekommt Score, BitLocker, BIOS und offene Hilferufe - und PC-Tools kann Aufträge aus Home Assistant bzw. der neuen Android-App annehmen (Pflege, Updates, Aufräumen, Virenscan, Sicherung, Zustand, Selbstupdate).',
     'Version 14.5: BitLocker-Schlüssel als PDF - Seite Sicherheit > "Schlüssel als PDF sichern". Die PDF enthält alle Angaben zum PC (Modell, Seriennummer, Windows, BIOS, Secure Boot, TPM), für jedes verschlüsselte Laufwerk Schlüssel-ID, Kurzkennung und den 48-stelligen Schlüssel groß lesbar, eine Anleitung zur Eingabe und Tipps zur Aufbewahrung. Speichern mit einem Klick auf USB-Stick, in Cloud-Ordner (OneDrive, Google Drive, Dropbox, Nextcloud, iCloud - werden automatisch gefunden) oder einen anderen Ordner/NAS, jede Kopie wird geprüft. Der BitLocker-Assistent legt die PDF jetzt automatisch neben jede Schlüsseldatei und öffnet sie zum Drucken.',
     'Version 14.4: BitLocker wird jetzt überwacht - rote Warnung, wenn BitLocker dauerhaft ausgesetzt ist (Daten ungeschützt) oder nur noch der Wiederherstellungsschlüssel übrig ist (Abfrage bei jedem Start). Der BitLocker-Assistent repariert das mit einem Klick: zuerst über den TPM-Chip - geht das wegen eines BIOS-Fehlers nicht, mit einem Start-Passwort. Läuft BitLocker mit Start-Passwort, achtet PC-Tools auf ein neues BIOS (bei Lenovo direkt im Hersteller-Katalog) und gibt Bescheid, sobald sich der TPM-Schutz erneut lohnt.',
     'Version 14.3.4: Ändert PC-Tools im BIOS Secure Boot, TPM oder den Startmodus, wird BitLocker vorher automatisch für 2 Neustarts ausgesetzt - so fragt Windows danach nicht mehr nach dem Wiederherstellungsschlüssel. Der Hinweis bei "Punkte beheben" zu Secure Boot erklärt das jetzt auch für Änderungen direkt im BIOS-Menü.',
@@ -23408,6 +23544,7 @@ $fleetExtra = (New-Card 'Fernaufträge an andere PCs' @(
         '<Grid Margin="24,6,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="230"/><ColumnDefinition Width="90"/><ColumnDefinition Width="160"/><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBox x:Name="Integrate_MqttHost" Padding="4,3" Margin="0,0,8,0" ToolTip="Broker, z.B. 192.168.1.10 oder homeassistant.local"/><TextBox x:Name="Integrate_MqttPort" Grid.Column="1" Padding="4,3" Margin="0,0,8,0" ToolTip="Port (1883)"/><TextBox x:Name="Integrate_MqttUser" Grid.Column="2" Padding="4,3" Margin="0,0,8,0" ToolTip="Benutzer"/><PasswordBox x:Name="IntMqttPwd" Grid.Column="3" Padding="4,3" Margin="0,0,8,0" ToolTip="Kennwort (leer lassen = unverändert)"/><TextBox x:Name="Integrate_MqttTopic" Grid.Column="4" Padding="4,3" ToolTip="Basis-Topic (pcpflege)"/></Grid>',
         '<CheckBox x:Name="Integrate_HaEnabled" Content="Home Assistant direkt (REST-API mit langlebigem Zugangstoken)" FontWeight="SemiBold"/>',
         '<Grid Margin="24,6,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="260"/></Grid.ColumnDefinitions><TextBox x:Name="Integrate_HaUrl" Padding="4,3" Margin="0,0,8,0" ToolTip="z.B. http://homeassistant.local:8123"/><PasswordBox x:Name="IntHaToken" Grid.Column="1" Padding="4,3" ToolTip="Token (leer lassen = unverändert)"/></Grid>',
+        '<CheckBox x:Name="Integrate_HaJobs" Content="Aufträge aus Home Assistant bzw. der Android-App annehmen (Pflege, Updates, Aufräumen, Virenscan, Sicherung, Zustand melden, PC-Tools aktualisieren - alle 10 Minuten geprüft)" Margin="24,0,0,10"/>',
         '<CheckBox x:Name="Integrate_RmmEnabled" Content="RMM / eigener Webhook (JSON per POST, optional mit Bearer-Token)" FontWeight="SemiBold"/>',
         '<Grid Margin="24,6,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="260"/></Grid.ColumnDefinitions><TextBox x:Name="Integrate_RmmUrl" Padding="4,3" Margin="0,0,8,0" ToolTip="https://rmm.example/api/pcpflege"/><PasswordBox x:Name="IntRmmToken" Grid.Column="1" Padding="4,3" ToolTip="Token (leer lassen = unverändert)"/></Grid>',
         '<WrapPanel><Button x:Name="BtnIntSave" Content="Speichern"/><Button x:Name="BtnIntTest" Content="Jetzt senden (Test)" Style="{StaticResource Sec}"/><Button x:Name="BtnIntExample" Content="Beispiel für Home Assistant" Style="{StaticResource Sec}"/></WrapPanel>',
@@ -24889,7 +25026,7 @@ function New-FdJobButton([string]$Name, [string]$Text, [string]$Tag, [string]$Gl
 $fdTiles = '<WrapPanel Margin="0,4,0,2">' + (New-StatTile 'FdTOnline' 'online (Lebenszeichen der letzten Minuten)' '#2D7FF9') + (New-StatTile 'FdTOffline' 'offline oder ohne Lebenszeichen' '#52627A') +
     (New-StatTile 'FdTRed' 'Ampel rot - dringend' '#DC2626') + (New-StatTile 'FdTYellow' 'Ampel gelb - bald erledigen' '#EA580C') + (New-StatTile 'FdTGreen' 'Ampel grün - alles gut' '#16A34A') + (New-StatTile 'FdTJobs' 'Aufträge wartend oder laufend' '#6D4AE8') + '</WrapPanel>'
 $fdGridX = New-DataGrid 'FdGrid' @('PC|Computer|120', 'Online|OnlineText|100|OnlineSort', 'Ampel|StateText|60|StateSort', 'Score|ScoreText|58|ScoreSort', 'Zuletzt gesehen|SeenText|112|SeenSort', 'Windows|Build|130', 'PC-Tools|VerText|80',
-    'Neustart|RebootText|68', 'Updates|WuText|70|WuSort', 'C: frei|FreeText|105|FreeSort', 'Läuft seit|UptimeText|80|UptimeSort', 'Fehler 24 h|ErrText|78|ErrSort', 'Sicherung|BackupText|150|BackupSort', 'Komplettsich.|FullText|95', 'Aufträge|JobText|*', 'Hilfe|HelpText|110', 'Standort|AkStandort|110', 'Schutz|KeyText|80') 'Height="330" SelectionMode="Extended"'
+    'Neustart|RebootText|68', 'Updates|WuText|70|WuSort', 'C: frei|FreeText|105|FreeSort', 'Läuft seit|UptimeText|80|UptimeSort', 'Fehler 24 h|ErrText|78|ErrSort', 'Sicherung|BackupText|150|BackupSort', 'Komplettsich.|FullText|95', 'Aufträge|JobText|*', 'Hilfe|HelpText|110', 'BitLocker|BlText|230', 'Standort|AkStandort|110', 'Schutz|KeyText|80') 'Height="330" SelectionMode="Extended"'
 $fdLive = (New-Card 'Fernwartung: alle PCs live' @(
         '<Grid Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Orientation="Horizontal" VerticalAlignment="Center"><Ellipse x:Name="FdLiveDot" Width="11" Height="11" Fill="#9AA5B8" Margin="0,0,9,0" VerticalAlignment="Center"/><TextBlock x:Name="FdInfo" Text="Wird beim Öffnen der Seite geladen ..." FontWeight="SemiBold" Foreground="#1F2A44" TextWrapping="Wrap" VerticalAlignment="Center"/></StackPanel><StackPanel Grid.Column="1" Orientation="Horizontal"><CheckBox x:Name="FdAuto" Content="alle 30 Sekunden aktualisieren" IsChecked="True" VerticalAlignment="Center" Margin="0,0,12,0"/><Button x:Name="FdBtnRefresh" Content="Jetzt aktualisieren" Style="{StaticResource Sec}" Padding="12,5"/></StackPanel></Grid>',
         $fdTiles,
@@ -25769,7 +25906,7 @@ function Save-All([switch]$Quiet) {
         try { $msg += Update-MonitorLogonTask $cfg } catch { $msg += ' Monitor-Aufgabe: ' + $_.Exception.Message }
         try { $msg += Register-BackupTask $cfg } catch { $msg += ' Sicherung: ' + $_.Exception.Message }
         try { $msg += Register-FbTask $cfg } catch { $msg += ' Komplettsicherung: ' + $_.Exception.Message }
-        try { $msg += ' ' + (Register-FleetPollTask ([bool]($cfg.Fleet.Enabled -and $cfg.Fleet.Dir -and ($cfg.Fleet.Remote -or $cfg.Fleet.Heartbeat -or $cfg.Fleet.Watch)))) } catch { $msg += ' Fernaufträge: ' + $_.Exception.Message }
+        try { $msg += ' ' + (Register-FleetPollTask ([bool](($cfg.Fleet.Enabled -and $cfg.Fleet.Dir -and ($cfg.Fleet.Remote -or $cfg.Fleet.Heartbeat -or $cfg.Fleet.Watch)) -or ($cfg.Integrate.HaEnabled -and $cfg.Integrate.HaJobs)))) } catch { $msg += ' Fernaufträge: ' + $_.Exception.Message }
         $ui.StatusText.Text = 'Einstellungen gespeichert. ' + $msg
     } catch {
         $ui.StatusText.Text = 'Einstellungen gespeichert, Zeitplan-Fehler: ' + $_.Exception.Message
@@ -30255,15 +30392,52 @@ function Show-FirstRunOrNews {
             'Tipp: Keine Technik-Kenntnisse nötig - der grüne Knopf "Alles automatisch" erledigt alles von selbst.'))), (T ('PC-Tools - Willkommen')), 'OK', 'Information') | Out-Null
         return
     }
-    if ($last -ne [string]$AppVersion) { try { Show-WhatsNew } catch { } }
+    if ($last -ne [string]$AppVersion -and -not (Test-Path -LiteralPath (Join-Path $DataDir 'neuigkeiten-aus.txt'))) { try { Show-WhatsNew $last } catch { } }
 }
-function Show-WhatsNew {
-    $news = @($ManualNews | Where-Object { $_ -match ('Version ' + [regex]::Escape($AppVersion)) })
-    if (-not $news.Count) { $news = @($ManualNews | Select-Object -First 6) }
-    $body = ($news | ForEach-Object { '•  ' + ($_ -replace '^Version [0-9.]+:\s*', '') }) -join [Environment]::NewLine + [Environment]::NewLine
-    [Windows.MessageBox]::Show((T (('Was ist neu in PC-Tools {0}:{1}{1}{2}' -f $AppVersion, [Environment]::NewLine, $body))), (T ('PC-Tools - Neuigkeiten')), 'OK', 'Information') | Out-Null
+function Show-WhatsNew([string]$Since = '') {
+    $sv = $null; try { if ($Since) { $sv = [version](($Since -split '[^0-9.]')[0]) } } catch { }
+    $items = [System.Collections.Generic.List[object]]::new()
+    foreach ($n in @($ManualNews)) {
+        if ([string]$n -notmatch '^Version ([0-9.]+):\s*(.*)$') { continue }
+        $v = $null; try { $v = [version]$Matches[1] } catch { continue }
+        $txt = $Matches[2]
+        if ($sv) { if ($v -le $sv) { continue } } elseif ($v.ToString() -ne $AppVersion -and $items.Count -ge 1) { continue }
+        $items.Add([pscustomobject]@{ Ver = $v; Text = $txt })
+    }
+    if (-not $items.Count) { foreach ($n in @($ManualNews | Select-Object -First 3)) { if ([string]$n -match '^Version ([0-9.]+):\s*(.*)$') { $items.Add([pscustomobject]@{ Ver = [version]$Matches[1]; Text = $Matches[2] }) } } }
+    $items = @($items | Sort-Object Ver -Descending | Select-Object -First 12)
+    $x = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="PC-Tools - Was ist neu" Width="760" Height="620" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI" FontSize="13.5" Background="#F4F6FA">
+  <Grid Margin="22"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <StackPanel><TextBlock x:Name="WnHead" FontSize="24" FontWeight="SemiBold" Foreground="#1F2A44"/><TextBlock x:Name="WnSub" Foreground="#6B7890" Margin="0,4,0,12" TextWrapping="Wrap"/></StackPanel>
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"><StackPanel x:Name="WnList"/></ScrollViewer>
+    <Grid Grid.Row="2" Margin="0,14,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+      <CheckBox x:Name="WnAgain" Content="Nach jedem Update anzeigen" IsChecked="True" VerticalAlignment="Center" Foreground="#475569"/>
+      <StackPanel Grid.Column="1" Orientation="Horizontal"><Button x:Name="WnWeb" Content="Webseite / alle Versionen" Padding="14,7" Margin="0,0,8,0"/><Button x:Name="WnOk" Content="Los geht's" Padding="18,7" IsDefault="True" IsCancel="True"/></StackPanel>
+    </Grid>
+  </Grid>
+</Window>
+"@
+    $w = [Windows.Markup.XamlReader]::Parse((Convert-ThemeXaml $x)); try { $w.Owner = $window } catch { }
+    $w.FindName('WnHead').Text = ((T 'Neu in PC-Tools') + ' ' + $AppVersion)
+    $w.FindName('WnSub').Text = $(if ($sv) { (T 'Seit deiner letzten Version') + (' ({0}) ' -f $Since) + (T 'ist das dazugekommen:') } else { (T 'Das ist neu:') })
+    $list = $w.FindName('WnList')
+    foreach ($it in $items) {
+        $b = New-Object Windows.Controls.Border; $b.Background = New-UiBrush '#FFFFFF'; $b.CornerRadius = '10'; $b.Padding = '14,10'; $b.Margin = '0,0,0,10'; $b.BorderBrush = New-UiBrush '#E2E7F0'; $b.BorderThickness = '1'
+        $sp = New-Object Windows.Controls.StackPanel
+        $h = New-Object Windows.Controls.TextBlock; $h.Text = ('Version {0}' -f $it.Ver); $h.FontWeight = 'SemiBold'; $h.FontSize = 15; $h.Foreground = New-UiBrush '#2D7FF9'; [void]$sp.Children.Add($h)
+        foreach ($part in @(([string]$it.Text) -split '(?<=\.)\s+(?=Neu|Außerdem|Dazu|Behoben|Verbessert)')) {
+            $t = New-Object Windows.Controls.TextBlock; $t.Text = (T ([string]$part)); $t.TextWrapping = 'Wrap'; $t.Margin = '0,6,0,0'; $t.Foreground = New-UiBrush '#1F2A44'; [void]$sp.Children.Add($t)
+        }
+        $b.Child = $sp; [void]$list.Children.Add($b)
+    }
+    $script:WnWin = $w
+    $w.FindName('WnOk').Add_Click({ $script:WnWin.Close() })
+    $w.FindName('WnWeb').Add_Click({ try { Start-Process 'https://rhedv42-sudo.github.io/pc-tools/#neu' } catch { } })
+    $w.Add_Closed({ try { if (-not $script:WnWin.FindName('WnAgain').IsChecked) { Set-Content -LiteralPath (Join-Path $DataDir 'neuigkeiten-aus.txt') -Value '1' -Encoding ASCII } else { Remove-Item -LiteralPath (Join-Path $DataDir 'neuigkeiten-aus.txt') -Force -ErrorAction SilentlyContinue } } catch { } })
+    [void]$w.ShowDialog()
 }
-
 # ---------------------------------------------------------------- Ninite: Programmauswahl
 $script:NinApps = [System.Collections.Generic.List[object]]::new()
 $script:NinAudit = $null
@@ -32871,6 +33045,7 @@ $ui.BtnIntSave.Add_Click({
         if ($ui.IntMqttPwd.Password) { $s.MqttPass = $ui.IntMqttPwd.Password }; if ($ui.IntHaToken.Password) { $s.HaToken = $ui.IntHaToken.Password }; if ($ui.IntRmmToken.Password) { $s.RmmToken = $ui.IntRmmToken.Password }
         Save-IntegrationSecrets $s; $ui.IntMqttPwd.Password = ''; $ui.IntHaToken.Password = ''; $ui.IntRmmToken.Password = ''
         $null = Save-All -Quiet; $ui.IntInfo.Text = 'Gespeichert. Gesendet wird nach jeder Pflege und alle 10 Minuten (mit Fernaufträgen).'
+        try { $cx = Read-PflegeConfig; $need = [bool](($cx.Integrate.HaEnabled -and $cx.Integrate.HaJobs) -or ($cx.Fleet.Enabled -and $cx.Fleet.Dir -and ($cx.Fleet.Remote -or $cx.Fleet.Heartbeat -or $cx.Fleet.Watch))); $ui.IntInfo.Text += ' ' + (Register-FleetPollTask $need) } catch { $ui.IntInfo.Text += ' Aufgabe: ' + $_.Exception.Message }
     } catch { Show-UiError $_.Exception.Message }
 })
 $ui.BtnIntTest.Add_Click({
@@ -38495,6 +38670,7 @@ function Start-HelpRequest {
         $ways = [System.Collections.Generic.List[string]]::new()
         if ($x.Fleet) { $ways.Add('Dein Helfer sieht den Hilferuf in PC-Tools unter "Meine PCs".') }
         if ($x.Notified) { $ways.Add('Dein Helfer hat eine Nachricht aufs Handy bekommen.') }
+        if (@($x.Results | Where-Object { $_ -like 'Home Assistant: OK*' }).Count) { $ways.Add('Der Hilferuf ist in Home Assistant bzw. der PC-Tools-App deines Helfers zu sehen.') }
         $mail = ''; try { $mail = [string](Read-PflegeConfig).Help.Mail } catch { }
         if ($mail -match '^[^@\s]+@[^@\s]+\.[^@\s]+$') {
             try {
@@ -41283,6 +41459,8 @@ function Show-FdData($Data) {
 }
 function Add-FdHelpFields($Rows, $Data) {
     $h = @{}; if ($Data -and $Data.PSObject.Properties['Help'] -and $Data.Help) { $h = $Data.Help }
+    $bl = @{}; foreach ($sx in @($Data.Status)) { if ($sx -and $sx.PSObject.Properties['BitLocker'] -and $sx.BitLocker) { $bl[([string]$sx.Computer).ToUpper()] = $sx.BitLocker } }
+    foreach ($r in @($Rows)) { if (-not $r) { continue }; $bx = $bl[([string]$r.Computer).ToUpper()]; $r | Add-Member -NotePropertyName BlText -NotePropertyValue $(if ($bx) { [string]$bx.Text } else { '–' }) -Force; $r | Add-Member -NotePropertyName BlLevel -NotePropertyValue $(if ($bx) { [string]$bx.Level } else { '' }) -Force }
     foreach ($r in @($Rows)) {
         if (-not $r) { continue }
         $k = ([string]$r.Computer).ToUpper(); $x = $null; if ($h.ContainsKey($k)) { $x = $h[$k] }
@@ -41293,6 +41471,7 @@ function Add-FdHelpFields($Rows, $Data) {
     }
 }
 function Update-FdHelpBox {
+    try { $nb = @($script:FdRows | Where-Object { $_.BlLevel -eq 'Error' -or ($_.BlText -like '*nicht gesichert*') }).Count; if ($nb) { $ui.StatusText.Text = ('Meine PCs: {0} PC(s) mit BitLocker-Problem oder ungesichertem Schlüssel - Spalte BitLocker.' -f $nb) } } catch { }
     $open = @($script:FdRows | Where-Object { $_.Help })
     if (-not $open.Count) { $ui.FdHelpBox.Visibility = 'Collapsed'; return }
     $ui.FdHelpBox.Visibility = 'Visible'
@@ -43491,20 +43670,20 @@ function Invoke-BlWizardRun {
             if ((Get-Content -LiteralPath $f -Raw -Encoding UTF8) -notmatch [regex]::Escape($first)) { throw 'Kontrolle fehlgeschlagen' }
             $pdfNote = ''
             if ($pdfLocal -and (Test-Path -LiteralPath $pdfLocal)) { $pd = Join-Path $folder ([IO.Path]::GetFileName($pdfLocal)); if ($pd -ne $pdfLocal) { Copy-Item -LiteralPath $pdfLocal -Destination $pd -Force -ErrorAction Stop; if ((Get-FileHash -LiteralPath $pd).Hash -ne (Get-FileHash -LiteralPath $pdfLocal).Hash) { throw 'PDF-Kontrolle fehlgeschlagen' } }; $pdfNote = ' + PDF' }
-            $log.Add(('✓ {0}: {1}{2} (gespeichert und geprüft)' -f $label, $f, $pdfNote)); return $f }
+            $log.Add(('✓ {0}: {1}{2} (gespeichert und geprüft)' -f $label, $f, $pdfNote)); if ($label -ne 'PC-Tools-Ordner') { Add-BlKeyBackupRecord $(if ($label -eq 'USB-Stick') { 'USB-Stick' } else { 'Ordner/Cloud' }) }; return $f }
         $local = ''; try { $local = & $write (Get-BlKeyFolder) 'PC-Tools-Ordner'; Write-BlKeyInfo (Get-BlKeyFolder) } catch { $log.Add('✗ PC-Tools-Ordner: ' + $_.Exception.Message) }
         if ($usb) { try { $null = & $write $usb 'USB-Stick' } catch { $log.Add('✗ USB-Stick: ' + $_.Exception.Message) } }
         if ($dir) { try { $null = & $write $dir 'Ordner' } catch { $log.Add('✗ Ordner: ' + $_.Exception.Message) } }
-        if ($z.WzVault.IsChecked) { try { try { $script:LicVault = @(Read-LicVault) } catch { }; foreach ($kp in $k.Keys) { Add-LicVaultItem ('BitLocker {0} {1}' -f $env:COMPUTERNAME, $mp) $kp.RecoveryPassword ('Kennung ' + $kp.KeyProtectorId) }; $log.Add('✓ Lizenz-Tresor') } catch { $log.Add('✗ Lizenz-Tresor: ' + $_.Exception.Message) } }
+        if ($z.WzVault.IsChecked) { try { try { $script:LicVault = @(Read-LicVault) } catch { }; foreach ($kp in $k.Keys) { Add-LicVaultItem ('BitLocker {0} {1}' -f $env:COMPUTERNAME, $mp) $kp.RecoveryPassword ('Kennung ' + $kp.KeyProtectorId) }; $log.Add('✓ Lizenz-Tresor'); Add-BlKeyBackupRecord 'Lizenz-Tresor' } catch { $log.Add('✗ Lizenz-Tresor: ' + $_.Exception.Message) } }
         if ($z.WzMs.IsChecked) {
             $ok = $false
             foreach ($kp in $k.Keys) { try { BackupToAAD-BitLockerKeyProtector -MountPoint $mp -KeyProtectorId $kp.KeyProtectorId -ErrorAction Stop | Out-Null; $ok = $true } catch { } }
             if (-not $ok) { foreach ($kp in $k.Keys) { try { Backup-BitLockerKeyProtector -MountPoint $mp -KeyProtectorId $kp.KeyProtectorId -ErrorAction Stop | Out-Null; $ok = $true } catch { } } }
-            if ($ok) { $log.Add('✓ Firmen-/Schulkonto (Entra/AD)') }
+            if ($ok) { $log.Add('✓ Firmen-/Schulkonto (Entra/AD)'); Add-BlKeyBackupRecord 'Firmenkonto' }
             else { $log.Add('! Microsoft-Konto: in den BitLocker-Einstellungen bei ' + $mp + ' auf "Wiederherstellungsschlüssel sichern" > "In Microsoft-Konto speichern" klicken (wird geöffnet). Prüfen: account.microsoft.com/devices/recoverykey'); try { Start-Process 'control.exe' '/name Microsoft.BitLockerDriveEncryption' } catch { } }
         }
         if ($z.WzPrint.IsChecked) {
-            if ($pdfLocal -and (Test-Path -LiteralPath $pdfLocal)) { try { Start-Process -FilePath $pdfLocal; $log.Add('✓ PDF zum Drucken geöffnet (Drucken mit Strg+P)') } catch { $log.Add('✗ PDF öffnen: ' + $_.Exception.Message) } }
+            if ($pdfLocal -and (Test-Path -LiteralPath $pdfLocal)) { try { Start-Process -FilePath $pdfLocal; $log.Add('✓ PDF zum Drucken geöffnet (Drucken mit Strg+P)'); Add-BlKeyBackupRecord 'Ausdruck' } catch { $log.Add('✗ PDF öffnen: ' + $_.Exception.Message) } }
             elseif ($local) { try { Start-Process 'notepad.exe' -ArgumentList '/p', ('"{0}"' -f $local); $log.Add('✓ Druck gestartet (Standarddrucker)') } catch { $log.Add('✗ Drucken: ' + $_.Exception.Message) } }
         }
         $z.WzState.Text = ($log -join "`n")
@@ -43709,7 +43888,7 @@ function Save-BlKeyPdfTo([string]$Pdf, [string[]]$Dirs) {
             $dst = Join-Path $d ([IO.Path]::GetFileName($Pdf))
             Copy-Item -LiteralPath $Pdf -Destination $dst -Force -ErrorAction Stop
             if ((Get-FileHash -LiteralPath $dst -Algorithm SHA256).Hash -ne $h0) { throw 'Kontrolle fehlgeschlagen (Datei weicht ab)' }
-            $res.Add(('✓ {0} (gespeichert und geprüft)' -f $dst))
+            $res.Add(('✓ {0} (gespeichert und geprüft)' -f $dst)); Add-BlKeyBackupRecord $(if ($d -match '^[A-Z]:\\BitLocker' -and (Get-CimInstance Win32_LogicalDisk -Filter ("DeviceID='{0}'" -f $d.Substring(0, 2)) -ErrorAction SilentlyContinue).DriveType -eq 2) { 'USB-Stick' } elseif ($d -match 'OneDrive|Google Drive|Meine Ablage|My Drive|Dropbox|Nextcloud|ownCloud|iCloud|pCloud|MagentaCLOUD') { 'Cloud' } else { 'Ordner/NAS' })
         } catch { $res.Add(('✗ {0}: {1}' -f $d, $_.Exception.Message)) }
     }
     return $res.ToArray()
@@ -43736,6 +43915,7 @@ function Show-BlPdfDialog {
       <Button x:Name="BpSave" Content="Speichern" Padding="18,8" Margin="0,0,8,0" IsDefault="True"/>
       <Button x:Name="BpOpen" Content="PDF öffnen / drucken" Padding="18,8" Margin="0,0,8,0"/>
       <Button x:Name="BpFolder" Content="Ordner öffnen" Padding="18,8" Margin="0,0,8,0"/>
+      <Button x:Name="BpManual" Content="Anders gesichert ..." Padding="18,8" Margin="0,0,8,0" ToolTip="Z.B. im Passwort-Manager oder Microsoft-Konto per Hand - nur zum Vermerken für Meine PCs"/>
       <Button x:Name="BpClose" Content="Schließen" Padding="18,8" IsCancel="True"/>
     </StackPanel>
   </StackPanel>
@@ -43743,7 +43923,7 @@ function Show-BlPdfDialog {
 "@
     $w = [Windows.Markup.XamlReader]::Parse((Convert-ThemeXaml $x)); try { $w.Owner = $window } catch { }
     $script:BlPd = @{ Win = $w; Pdf = $pdf }
-    foreach ($n in 'BpInfo', 'BpTargets', 'BpOther', 'BpOtherPath', 'BpPick', 'BpRefresh', 'BpState', 'BpSave', 'BpOpen', 'BpFolder', 'BpClose') { $script:BlPd[$n] = $w.FindName($n) }
+    foreach ($n in 'BpInfo', 'BpTargets', 'BpOther', 'BpOtherPath', 'BpPick', 'BpRefresh', 'BpState', 'BpSave', 'BpOpen', 'BpFolder', 'BpManual', 'BpClose') { $script:BlPd[$n] = $w.FindName($n) }
     $nk = @($r.Volumes | ForEach-Object { $_.Keys }).Count
     $script:BlPd.BpInfo.Text = ('Die PDF enthält alle Angaben zu diesem PC ({0}, Seriennummer {1}), {2} Wiederherstellungsschlüssel für {3} Laufwerk(e), eine Anleitung zur Eingabe und Tipps zur Aufbewahrung. Erstellt: {4}' -f $r.Computer, $r.Serial, $nk, @($r.Volumes).Count, $pdf)
     $script:BlPdFill = {
@@ -43755,9 +43935,10 @@ function Show-BlPdfDialog {
     & $script:BlPdFill
     $script:BlPd.BpRefresh.Add_Click({ & $script:BlPdFill })
     $script:BlPd.BpPick.Add_Click({ Select-FolderInto $script:BlPd.BpOtherPath; if ($script:BlPd.BpOtherPath.Text.Trim()) { $script:BlPd.BpOther.IsChecked = $true } })
-    $script:BlPd.BpOpen.Add_Click({ try { Start-Process -FilePath $script:BlPd.Pdf } catch { Show-UiError ('PDF öffnen: ' + $_.Exception.Message) } })
+    $script:BlPd.BpOpen.Add_Click({ try { Start-Process -FilePath $script:BlPd.Pdf; if (Confirm-Ui 'PDF geöffnet. Wenn du sie ausdruckst, merkt sich PC-Tools "Ausdruck" als Sicherungsort (für Meine PCs). Als ausgedruckt vermerken?') { Add-BlKeyBackupRecord 'Ausdruck' } } catch { Show-UiError ('PDF öffnen: ' + $_.Exception.Message) } })
     $script:BlPd.BpFolder.Add_Click({ try { Start-Process 'explorer.exe' ('/select,"{0}"' -f $script:BlPd.Pdf) } catch { } })
     $script:BlPd.BpClose.Add_Click({ $script:BlPd.Win.Close() })
+    $script:BlPd.BpManual.Add_Click({ $w2 = Show-InputDialog 'Wo hast du den Schlüssel selbst gesichert? (z.B. Passwort-Manager, Microsoft-Konto, Tresor)' 'Passwort-Manager'; if ($w2) { Add-BlKeyBackupRecord ([string]$w2).Trim(); $script:BlPd.BpState.Text = ('Vermerkt: {0}' -f $w2) } })
     $script:BlPd.BpSave.Add_Click({
         $dirs = @($script:BlPd.BpTargets.Children | Where-Object { $_ -is [Windows.Controls.CheckBox] -and $_.IsChecked } | ForEach-Object { [string]$_.Tag })
         if ($script:BlPd.BpOther.IsChecked -and $script:BlPd.BpOtherPath.Text.Trim()) { $dirs += $script:BlPd.BpOtherPath.Text.Trim() }
