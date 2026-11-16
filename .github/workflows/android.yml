@@ -1,0 +1,75 @@
+name: Android-App
+
+on:
+  push:
+    branches: [main]
+    paths: ['android/**', '.github/workflows/android.yml']
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Als Release veröffentlichen (Tag android-vX)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Version
+        id: ver
+        run: |
+          V="1.0.${{ github.run_number }}"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "PCT_VERSION=$V" >> "$GITHUB_ENV"
+          echo "PCT_VERSION_CODE=${{ github.run_number }}" >> "$GITHUB_ENV"
+      - name: Signatur (optional, aus Repository-Secrets)
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/pctools.jks"
+            echo "PCT_KEYSTORE=$RUNNER_TEMP/pctools.jks" >> "$GITHUB_ENV"
+            echo "PCT_KEYSTORE_PASS=$KS_PASS" >> "$GITHUB_ENV"
+            echo "::notice::Release-Signatur aus Secrets"
+          else
+            echo "::warning::Kein ANDROID_KEYSTORE_B64-Secret - APK wird mit Debug-Schlüssel signiert (Updates ggf. nur nach Deinstallation)"
+          fi
+      - name: Bauen
+        working-directory: android
+        run: |
+          set -o pipefail
+          gradle assembleRelease --no-daemon --stacktrace 2>&1 | tee "$RUNNER_TEMP/build.log" || {
+            grep -E "^e: |error:|FAILURE|What went wrong|Could not|> " "$RUNNER_TEMP/build.log" | head -40 | while IFS= read -r l; do echo "::error::$l"; done
+            exit 1
+          }
+          mkdir -p ../dist
+          cp app/build/outputs/apk/release/app-release.apk "../dist/PC-Tools-App-${{ steps.ver.outputs.version }}.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PC-Tools-App
+          path: dist/*.apk
+      - name: Release
+        if: github.event_name == 'workflow_dispatch' && inputs.release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-v${{ steps.ver.outputs.version }}
+          name: PC-Tools-App ${{ steps.ver.outputs.version }} (Android)
+          target_commitish: ${{ github.sha }}
+          make_latest: false
+          body: |
+            **PC-Tools-App für Android** – Begleiter zu „Meine PCs“ über Home Assistant: Ampel aller PCs, Hilferufe mit Bericht, Hinweise, BitLocker- und BIOS-Stand, Aufträge (Pflege, Updates, Aufräumen, Virenscan, Sicherung, Zustand, PC-Tools aktualisieren) und Benachrichtigungen.
+
+            Installation: APK auf dem Handy öffnen und „Installation aus dieser Quelle erlauben“ bestätigen. Voraussetzung: PC-Tools 14.6 oder neuer mit „Home Assistant direkt“ auf den PCs.
+          files: dist/*.apk
