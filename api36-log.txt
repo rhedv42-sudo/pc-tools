@@ -1,0 +1,80 @@
+11-17 08:54:33.230   582   679 E AppHibernationService: Package de.rh.pctools is not installed for user 0
+11-17 08:54:33.230   582   679 E AppHibernationService: Package de.rh.pctools is not installed for any user
+11-17 08:54:33.231   582   679 E AppHibernationService: Package de.rh.pctools is not installed for user 0
+11-17 08:54:33.239   582   679 E AppHibernationService: Package de.rh.pctools is not installed for any user
+11-17 08:54:33.467   582  1309 D CoreBackPreview: Window{6d63f35 u0 de.rh.pctools/de.rh.pctools.MainActivity}: Setting back callback OnBackInvokedCallbackInfo{mCallback=android.window.IOnBackInvokedCallback$Stub$Proxy@b8c1fed, mPriority=0, mIsAnimationCallback=false, mOverrideBehavior=0}
+11-17 08:54:34.097   582   685 D LauncherAppsService: onPackageAdded: triggering onPackageAdded for user=UserHandle{0}, packageName=de.rh.pctools
+11-17 08:54:34.097   582   685 D LauncherAppsService: onPackageAdded: Skipping - package filtered for user=UserHandle{0}, packageName=de.rh.pctools
+11-17 08:54:34.097   582   685 D LauncherAppsService: onPackageAdded: triggering onPackageAdded for user=UserHandle{0}, packageName=de.rh.pctools
+11-17 08:54:34.097   582   685 D LauncherAppsService: onPackageAdded: triggering onPackageAdded for user=UserHandle{0}, packageName=de.rh.pctools
+11-17 08:54:34.205   582   677 I ActivityTaskManager: Displayed de.rh.pctools/.MainActivity for user 0: +1s460ms
+11-17 08:54:34.232   582   777 I ImeTracker: de.rh.pctools:19ef04e9: onRequestHide at ORIGIN_SERVER reason HIDE_UNSPECIFIED_WINDOW fromUser false
+11-17 08:54:34.234  2105  2105 I ImeTracker: de.rh.pctools:19ef04e9: onCancelled at PHASE_CLIENT_ALREADY_HIDDEN
+11-17 08:54:34.240  1488  1488 I GoogleInputMethodService: GoogleInputMethodService.onStartInput():1293 onStartInput(EditorInfo{EditorInfo{packageName=de.rh.pctools, inputType=0, inputTypeString=NULL, enableLearning=false, autoCorrection=false, autoComplete=false, imeOptions=0, privateImeOptions=null, actionName=UNSPECIFIED, actionLabel=null, initialSelStart=-1, initialSelEnd=-1, initialCapsMode=0, label=null, fieldId=0, fieldName=null, extras=null, hintText=null, hintLocales=[]}}, false)
+11-17 08:54:34.255   582   743 W PackageConfigPersister: App-specific configuration not found for packageName: de.rh.pctools and userId: 0
+11-17 08:54:34.292   582   978 I SdkSandboxManager: No SDKs used. Skipping SDK data reconcilation for CallingInfo{mUid=10216, mPackageName='de.rh.pctools, mAppProcessToken='null'}
+11-17 08:54:34.308   582  1083 D CoreBackPreview: Window{e82cbf3 u0 Splash Screen de.rh.pctools EXITING}: Setting back callback null
+11-17 08:54:34.310   582   957 I AppWidgetServiceImpl: Updating package stopped masked state for uid 10216 package de.rh.pctools isStopped false
+11-17 08:54:34.517   517  1649 D NativePermissionController: updatePackagesForUid, UidPackageState{uid: 10216, packageNames: [de.rh.pctools]}
+11-17 08:54:34.528   582   582 I AppsFilter: interaction: PackageSetting{b45daee com.android.microdroid.empty_payload/10196} -> PackageSetting{786eb8f de.rh.pctools/10216} BLOCKED
+11-17 08:54:34.799  1169  1169 D CarrierSvcBindHelper: onPackageAdded: de.rh.pctools
+11-17 08:54:34.821  1169  1420 I SatelliteAppTracker: onPackageAdded : de.rh.pctools
+11-17 08:54:34.835  1169  1420 I SatelliteAppTracker: onPackageModified : de.rh.pctools
+11-17 08:54:35.325  1169  1415 D ImsResolver: maybeAddedImsService, packageName: de.rh.pctools
+11-17 08:54:35.325  1169  1415 V ImsResolver: searchForImsServices: package=de.rh.pctools, users=[UserHandle{0}]
+11-17 08:54:35.349  1169  1169 W VvmPkgInstalledRcvr: carrierVvmPkgAdded: carrier vvm packages doesn't contain de.rh.pctools
+11-17 08:54:35.349  1169  1415 V ImsResolver: searchForImsServices: package=de.rh.pctools, users=[UserHandle{0}]
+11-17 08:54:35.434  1169  1169 D CarrierSvcBindHelper: onPackageModified: de.rh.pctools
+11-17 08:54:35.460  1169  1169 D SatelliteController: packageStateChanged: package:de.rh.pctools DefaultSmsPackageName:com.google.android.apps.messaging
+11-17 08:54:35.462  1169  1415 D ImsResolver: maybeAddedImsService, packageName: de.rh.pctools
+11-17 08:54:35.462  1169  1415 V ImsResolver: searchForImsServices: package=de.rh.pctools, users=[UserHandle{0}]
+11-17 08:54:35.462  1169  1415 V ImsResolver: searchForImsServices: package=de.rh.pctools, users=[UserHandle{0}]
+11-17 08:54:35.482  1288  1322 D SessionCommitReceiver: Removing unneeded PromiseIcon for package: de.rh.pctools, install reason: 0, alreadyAddedPromiseIcon: false
+11-17 08:54:35.482  1288  1322 D LauncherAppsCallbackImpl: onPackageAdded triggered for packageName=de.rh.pctools, user=UserHandle{0}
+11-17 08:54:35.483  1288  1322 D PackageUpdatedTask: Package updated: mOp=ADD packages=[de.rh.pctools], user=UserHandle{0}
+11-17 08:54:35.505   582   971 D ShortcutService: adding package: de.rh.pctools userId=0
+11-17 08:54:35.505   582   971 D ShortcutService: changing package: de.rh.pctools userId=0
+11-17 08:54:35.623  1650  2283 I AiAiEcho: AppIndexer Package:[de.rh.pctools] UserProfile:[0] Enabled:[true].
+11-17 08:54:35.623  1650  2283 I AiAiEcho: AppFetcherImplV2 updateApps package:[de.rh.pctools], userId:[0], reason:[package is updated.].
+11-17 08:54:37.373  1017  1017 I SafetyLabelChangedBroadcastReceiver: received broadcast packageName: de.rh.pctools, current user: UserHandle{0}, packageChangeEvent: NEW_INSTALL, intent user: UserHandle{0}
+11-17 08:54:37.717  1288  1322 D PackageUpdatedTask: Package updated: mOp=UPDATE packages=[de.rh.pctools], user=UserHandle{0}
+11-17 08:54:44.357  1652  2721 I Blockstore: [DataStoreImpl] Clearing Blockstore Data for package de.rh.pctools [CONTEXT service_id=258 ]
+11-17 08:54:45.014  1333  2318 I FontLog : Package de.rh.pctools has no metadata [CONTEXT service_id=132 ]
+11-17 08:54:47.081   582  1916 I ActivityTaskManager: START u0 {flg=0x10000000 xflg=0x5 cmp=de.rh.pctools/.MainActivity} with LAUNCH_MULTIPLE from uid 2000 (BAL_ALLOW_PERMISSION) result code=3
+11-17 08:54:47.083  1015  1078 D WindowManagerShell: onActivityRestartAttempt: topActivity=ComponentInfo{de.rh.pctools/de.rh.pctools.MainActivity}, wasVisible=true
+11-17 08:54:55.720   582  1309 I ActivityManager: Force stopping de.rh.pctools appid=10216 user=0: from pid 3429
+11-17 08:54:55.728   582  1309 I ActivityManager: Killing 2105:de.rh.pctools/u0a216 (adj 0): stop de.rh.pctools due to from pid 3429
+11-17 08:54:55.747   582  1913 I WindowManager: WIN DEATH: Window{6d63f35 u0 de.rh.pctools/de.rh.pctools.MainActivity}
+11-17 08:54:55.747   582   768 W InputDispatcher: channel '6d63f35 de.rh.pctools/de.rh.pctools.MainActivity' ~ Consumer closed input channel or an error occurred.  events=0x9
+11-17 08:54:55.747   582   768 E InputDispatcher: channel '6d63f35 de.rh.pctools/de.rh.pctools.MainActivity' ~ Channel is unrecoverably broken and will be disposed!
+11-17 08:54:55.750   582  1083 I ImeTracker: de.rh.pctools:423dbc5d: onRequestHide at ORIGIN_SERVER reason HIDE_REMOVE_CLIENT fromUser false
+11-17 08:54:55.750   582  1083 I ImeTracker: de.rh.pctools:423dbc5d: onCancelled at PHASE_SERVER_SHOULD_HIDE
+11-17 08:54:55.776   582  1309 W ActivityTaskManager: Force removing ActivityRecord{158507338 u0 de.rh.pctools/.MainActivity t7 f}}: app died, no saved state
+11-17 08:54:55.811  1015  1078 V WindowManagerShell: Transition requested (#9): android.os.BinderProxy@94d279a TransitionRequestInfo { type = CLOSE, triggerTask = TaskInfo{userId=0 taskId=7 effectiveUid=10216 displayId=0 isRunning=false baseIntent=Intent { flg=0x10000000 cmp=de.rh.pctools/.MainActivity } baseActivity=null topActivity=null origActivity=null realActivity=ComponentInfo{de.rh.pctools/de.rh.pctools.MainActivity} numActivities=0 lastActiveTime=43785 supportsMultiWindow=true resizeMode=1 isResizeable=true minWidth=-1 minHeight=-1 defaultMinSize=220 token=WCT{android.window.IWindowContainerToken$Stub$Proxy@306f8cb} topActivityType=1 pictureInPictureParams=null shouldDockBigOverlays=false launchIntoPipHostTaskId=-1 lastParentTaskIdBeforePip=-1 displayCutoutSafeInsets=Rect(0, 0 - 0, 0) topActivityInfo=null launchCookies=[] positionInParent=Point(0, 0) parentTaskId=-1 isFocused=true isVisible=true isVisibleRequested=true isTopActivityNoDisplay=false isSleeping=false locusId=null displayAreaFeatureId=1 isTopActivityTransparent=false isActivityStackTransparent=true lastNonFullscreenBounds=Rect(74, 160 - 246, 480) capturedLink=null capturedLinkTimestamp=0 requestedVisibleTypes=-9 topActivityRequestOpenInBrowserEducationTimestamp=0 appCompatTaskInfo=AppCompatTaskInfo { topActivityInSizeCompat=false eligibleForLetterboxEducation= false isLetterboxEducationEnabled= false isLetterboxDoubleTapEnabled= false eligibleForUserAspectRatioButton= false topActivityBoundsLetterboxed= false isFromLetterboxDoubleTap= false topActivityLetterboxVerticalPosition= -1 topActivityLetterboxHorizontalPosition= -1 topActivityLetterboxWidth=-1 topActivityLetterboxHeight=-1 topActivityAppBounds=Rect(0, 0 - 0, 0) isUserFullscreenOverrideEnabled=false isSystemFullscreenOverrideEnabled=false hasMinAspectRatioOverride=false topActivityLetterboxBounds=null cameraCompatTaskInfo=CameraCompatTaskInfo { freeformCameraCompatMode=undefined}} topActivityMainWindowFrame=null}, pipChange = null, remoteTransition = null, displayChange = null, flags = 0, debugId = 9 }
+11-17 08:54:55.854   582  1309 I AppsFilter: interaction: PackageSetting{b45daee com.android.microdroid.empty_payload/10196} -> PackageSetting{5d787e8 de.rh.pctools/10216} BLOCKED
+11-17 08:54:55.865   582  1917 V ActivityManager: Got obituary of 2105:de.rh.pctools
+11-17 08:54:55.885   582   957 I AppWidgetServiceImpl: Updating package stopped masked state for uid 10216 package de.rh.pctools isStopped true
+11-17 08:54:55.911  1169  1169 D CarrierSvcBindHelper: onHandleForceStop: [de.rh.pctools]
+11-17 08:54:56.195   582  1377 V SplashScreenExceptionList: SplashScreen checking exception for package de.rh.pctools (target sdk:35) -> false
+11-17 08:54:56.235   582  1377 I ActivityTaskManager: START u0 {flg=0x10000000 xflg=0x5 cmp=de.rh.pctools/.MainActivity (has extras)} with LAUNCH_MULTIPLE from uid 2000 (BAL_ALLOW_PERMISSION) result code=0
+11-17 08:54:56.292   582  1957 I AppsFilter: interaction: PackageSetting{b45daee com.android.microdroid.empty_payload/10196} -> PackageSetting{b2da124 de.rh.pctools/10216} BLOCKED
+11-17 08:54:56.302   582  1731 D CoreBackPreview: Window{267a578 u0 Splash Screen de.rh.pctools}: Setting back callback OnBackInvokedCallbackInfo{mCallback=android.window.IOnBackInvokedCallback$Stub$Proxy@d4ad642, mPriority=0, mIsAnimationCallback=false, mOverrideBehavior=0}
+11-17 08:54:56.372  3455  3455 I de.rh.pctools: Using CollectorTypeCMC GC.
+11-17 08:54:56.372  3455  3455 W de.rh.pctools: Unexpected CPU variant for x86: x86_64.
+11-17 08:54:56.372  3455  3455 W de.rh.pctools: Known variants: atom, sandybridge, silvermont, goldmont, goldmont-plus, goldmont-without-sha-xsaves, tremont, kabylake, alderlake, default
+11-17 08:54:56.374   582   687 I ActivityManager: Start proc 3455:de.rh.pctools/u0a216 for next-top-activity {de.rh.pctools/de.rh.pctools.MainActivity}
+11-17 08:54:56.376  3455  3455 E de.rh.pctools: Not starting debugger since process cannot load the jdwp agent.
+11-17 08:54:56.392   582   957 I AppWidgetServiceImpl: Updating package stopped masked state for uid 10216 package de.rh.pctools isStopped false
+11-17 08:54:56.507  3455  3455 D nativeloader: Configuring clns-9 for other apk /data/app/~~BBctE8qA6uFFLOJL2RTjtw==/de.rh.pctools-fvWLHH3n8l2Q1SM1iICE1A==/base.apk. target_sdk_version=35, uses_libraries=, library_path=/data/app/~~BBctE8qA6uFFLOJL2RTjtw==/de.rh.pctools-fvWLHH3n8l2Q1SM1iICE1A==/lib/x86_64, permitted_path=/data:/mnt/expand:/data/user/0/de.rh.pctools
+11-17 08:54:56.510  3455  3455 I de.rh.pctools: AssetManager2(0x6ffd1841e5b8) locale list changing from [] to [en-US]
+11-17 08:54:56.526  3455  3455 V GraphicsEnvironment: de.rh.pctools is not listed in per-application setting
+11-17 08:54:56.526  3455  3455 V GraphicsEnvironment: de.rh.pctools is not listed in ANGLE allowlist or settings, returning default
+11-17 08:54:56.545   582   677 V WindowManager: Sent Transition (#9) createdAt=11-17 08:54:55.776 via request=TransitionRequestInfo { type = CLOSE, triggerTask = TaskInfo{userId=0 taskId=7 effectiveUid=10216 displayId=0 isRunning=false baseIntent=Intent { flg=0x10000000 cmp=de.rh.pctools/.MainActivity } baseActivity=null topActivity=null origActivity=null realActivity=ComponentInfo{de.rh.pctools/de.rh.pctools.MainActivity} numActivities=0 lastActiveTime=43785 supportsMultiWindow=true resizeMode=1 isResizeable=true minWidth=-1 minHeight=-1 defaultMinSize=220 token=WCT{RemoteToken{7220aed Task{1062384 #7 type=standard A=10216:de.rh.pctools}}} topActivityType=1 pictureInPictureParams=null shouldDockBigOverlays=false launchIntoPipHostTaskId=-1 lastParentTaskIdBeforePip=-1 displayCutoutSafeInsets=Rect(0, 0 - 0, 0) topActivityInfo=null launchCookies=[] positionInParent=Point(0, 0) parentTaskId=-1 isFocused=true isVisible=true isVisibleRequested=true isTopActivityNoDisplay=false isSleeping=false locusId=null displayAreaFeatureId=1 isTopActivityTransparent=false isActivityStackTransparent=true lastNonFullscreenBounds=Rect(74, 160 - 246, 480) capturedLink=null capturedLinkTimestamp=0 requestedVisibleTypes=-9 topActivityRequestOpenInBrowserEducationTimestamp=0 appCompatTaskInfo=AppCompatTaskInfo { topActivityInSizeCompat=false eligibleForLetterboxEducation= false isLetterboxEducationEnabled= false isLetterboxDoubleTapEnabled= false eligibleForUserAspectRatioButton= false topActivityBoundsLetterboxed= false isFromLetterboxDoubleTap= false topActivityLetterboxVerticalPosition= -1 topActivityLetterboxHorizontalPosition= -1 topActivityLetterboxWidth=-1 topActivityLetterboxHeight=-1 topActivityAppBounds=Rect(0, 0 - 0, 0) isUserFullscreenOverrideEnabled=false isSystemFullscreenOverrideEnabled=false hasMinAspectRatioOverride=false topActivityLetterboxBounds=null cameraCompatTaskInfo=CameraCompatTaskInfo { freeformCameraCompatMode=undefined}} topActivityMainWindowFrame=null}, pipChange = null, remoteTransition = null, displayChange = null, flags = 0, debugId = 9 }
+11-17 08:54:56.545   582   677 V WindowManager:         {WCT{RemoteToken{d743667 Task{1f31ceb #8 type=standard A=10216:de.rh.pctools}}} m=OPEN f=MOVE_TO_TOP leash=Surface(name=Task=8)/@0xed1a981 sb=Rect(0, 0 - 320, 640) eb=Rect(0, 0 - 320, 640) epz=Point(320, 640) d=0 taskParent=-1}
+11-17 08:54:56.605  3455  3455 I de.rh.pctools: AssetManager2(0x6ffd1841c998) locale list changing from [] to [en-US]
+11-17 08:54:56.841   582  1913 D CoreBackPreview: Window{1290c4b u0 de.rh.pctools/de.rh.pctools.MainActivity}: Setting back callback OnBackInvokedCallbackInfo{mCallback=android.window.IOnBackInvokedCallback$Stub$Proxy@7fdf172, mPriority=0, mIsAnimationCallback=false, mOverrideBehavior=0}
+11-17 08:54:57.698   582   677 I ActivityTaskManager: Displayed de.rh.pctools/.MainActivity for user 0: +1s540ms
+11-17 08:54:58.038   582   777 I ImeTracker: de.rh.pctools:7295d349: onRequestHide at ORIGIN_SERVER reason HIDE_UNSPECIFIED_WINDOW fromUser false
+11-17 08:54:58.055  3455  3455 I ImeTracker: de.rh.pctools:7295d349: onCancelled at PHASE_CLIENT_ALREADY_HIDDEN
+11-17 08:54:58.079  1488  1488 I GoogleInputMethodService: GoogleInputMethodService.onStartInput():1293 onStartInput(EditorInfo{EditorInfo{packageName=de.rh.pctools, inputType=0, inputTypeString=NULL, enableLearning=false, autoCorrection=false, autoComplete=false, imeOptions=0, privateImeOptions=null, actionName=UNSPECIFIED, actionLabel=null, initialSelStart=-1, initialSelEnd=-1, initialCapsMode=0, label=null, fieldId=0, fieldName=null, extras=null, hintText=null, hintLocales=[]}}, false)
+11-17 08:54:58.086   582  1002 W PackageConfigPersister: App-specific configuration not found for packageName: de.rh.pctools and userId: 0
