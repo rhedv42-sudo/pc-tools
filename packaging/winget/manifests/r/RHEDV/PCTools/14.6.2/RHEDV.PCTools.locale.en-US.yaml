@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.locale.1.9.0.schema.json
+PackageIdentifier: RHEDV.PCTools
+PackageVersion: 14.6.2
+PackageLocale: en-US
+Publisher: PC-Tools Open Source Project
+PublisherUrl: https://github.com/rhedv42-sudo
+PublisherSupportUrl: https://github.com/rhedv42-sudo/pc-tools/issues
+Author: René Hütt
+PackageName: PC-Tools
+PackageUrl: https://rhedv42-sudo.github.io/pc-tools/
+License: Apache-2.0
+LicenseUrl: https://github.com/rhedv42-sudo/pc-tools/blob/main/LICENSE
+ShortDescription: Free, open-source all-in-one maintenance tool for Windows – updates, cleanup, health score, backup, BitLocker assistant and remote family help.
+Description: |-
+  PC-Tools keeps Windows maintained, secure and fast – much of it with one click.
+  Health score with traffic light and one-click fixes, Windows, app (winget), driver and BIOS updates, cleanup and boot-time analysis, security checks and password leak check, file and full-image backup, BitLocker assistant with recovery-key PDF, "Get help" and "My PCs" for family helpers (also via Home Assistant and an Android app), simple mode for beginners and an optional AI assistant.
+  12 languages, no telemetry, no ads.
+Tags:
+- maintenance
+- updates
+- drivers
+- cleanup
+- bitlocker
+- backup
+- remote-help
+- open-source
+- powershell
+ManifestType: locale
+ManifestVersion: 1.9.0

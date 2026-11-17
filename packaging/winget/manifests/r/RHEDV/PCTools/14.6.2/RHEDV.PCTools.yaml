@@ -1,0 +1,6 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.9.0.schema.json
+PackageIdentifier: RHEDV.PCTools
+PackageVersion: 14.6.2
+DefaultLocale: de-DE
+ManifestType: version
+ManifestVersion: 1.9.0

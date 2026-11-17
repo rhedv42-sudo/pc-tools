@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.9.0.schema.json
+PackageIdentifier: RHEDV.PCTools
+PackageVersion: 14.6.2
+InstallerType: inno
+Scope: machine
+ElevationRequirement: elevatesSelf
+UpgradeBehavior: install
+ProductCode: '{6F1C2B3A-5D4E-4F70-9A1B-0C7005A10000}_is1'
+ReleaseDate: 2026-11-17
+Installers:
+- Architecture: x64
+  InstallerUrl: https://github.com/rhedv42-sudo/pc-tools/releases/download/v14.6.2/PC-Tools-Setup-14.6.2.exe
+  InstallerSha256: F7562CFFEF9D9753B40E4C992B674DFFFE27AA8514958A612E83CAAA11A30D93
+ManifestType: installer
+ManifestVersion: 1.9.0

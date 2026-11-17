@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.9.0.schema.json
+PackageIdentifier: RHEDV.PCTools
+PackageVersion: 14.6.2
+PackageLocale: de-DE
+Publisher: PC-Tools Open Source Project
+PublisherUrl: https://github.com/rhedv42-sudo
+PublisherSupportUrl: https://github.com/rhedv42-sudo/pc-tools/issues
+PrivacyUrl: https://github.com/rhedv42-sudo/pc-tools/blob/main/DATENSCHUTZ.md
+Author: René Hütt
+PackageName: PC-Tools
+PackageUrl: https://rhedv42-sudo.github.io/pc-tools/
+License: Apache-2.0
+LicenseUrl: https://github.com/rhedv42-sudo/pc-tools/blob/main/LICENSE
+Copyright: PC-Tools Open Source Project
+ShortDescription: Kostenloses Open-Source-Wartungswerkzeug für Windows – Updates, Aufräumen, Zustands-Score, Datensicherung, BitLocker-Assistent und Fernhilfe.
+Description: |-
+  PC-Tools hält Windows gepflegt, sicher und schnell – vieles mit einem Klick.
+  Zustands-Score mit Ampel und „Punkte beheben“, Windows-, Programm- (winget), Treiber- und BIOS-Updates, Aufräumen und Startzeit-Analyse, Sicherheitsprüfung und Passwort-Check, Datensicherung und Komplettsicherung, BitLocker-Assistent mit Schlüssel-PDF, „Hilfe holen“ und „Meine PCs“ für Familien-Helfer (auch mit Home Assistant und Android-App), Einfach-Modus für Einsteiger und optionaler KI-Assistent.
+  12 Sprachen, keine Telemetrie, keine Werbung.
+Moniker: pc-tools
+Tags:
+- wartung
+- pflege
+- updates
+- treiber
+- aufraeumen
+- bitlocker
+- datensicherung
+- fernhilfe
+- open-source
+- powershell
+ReleaseNotesUrl: https://github.com/rhedv42-sudo/pc-tools/releases/tag/v14.6.2
+ManifestType: defaultLocale
+ManifestVersion: 1.9.0
