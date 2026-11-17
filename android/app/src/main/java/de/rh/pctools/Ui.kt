@@ -9,6 +9,7 @@ import android.view.Gravity
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 
 /** Kleine Helfer für eine Oberfläche ohne XML-Layouts. */
@@ -58,5 +59,32 @@ object Ui {
         setPadding(0, dp(a, 3), 0, dp(a, 3))
         addView(text(a, label, 13f, true, MUTED).apply { layoutParams = LinearLayout.LayoutParams(dp(a, 120), LinearLayout.LayoutParams.WRAP_CONTENT) })
         addView(text(a, value, 14f).apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) })
+    }
+
+    /** Scrollbarer Bildschirm (Rand zu Titel-/Statusleiste regelt das Theme: windowOptOutEdgeToEdgeEnforcement). */
+    fun screen(a: Activity, content: View): ScrollView = ScrollView(a).apply {
+        setBackgroundColor(BG)
+        isFillViewport = true
+        addView(content)
+    }
+
+    fun stat(a: Activity, n: Int, label: String, col: Int): LinearLayout = LinearLayout(a).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER_HORIZONTAL
+        val p = dp(a, 8); setPadding(p, p, p, p)
+        background = GradientDrawable().apply { setColor(Color.WHITE); cornerRadius = dp(a, 12).toFloat(); setStroke(dp(a, 1), 0xFFE2E7F0.toInt()) }
+        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(dp(a, 3), 0, dp(a, 3), dp(a, 10)) }
+        addView(text(a, n.toString(), 22f, true, col).apply { gravity = Gravity.CENTER })
+        addView(text(a, label, 12f, false, MUTED).apply { gravity = Gravity.CENTER })
+    }
+
+    fun open(a: Activity, url: String) {
+        try { a.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))) }
+        catch (e: Exception) { android.widget.Toast.makeText(a, "Kein Browser gefunden", android.widget.Toast.LENGTH_SHORT).show() }
+    }
+
+    fun copy(a: Activity, label: String, textValue: String) {
+        (a.getSystemService(Activity.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText(label, textValue))
+        android.widget.Toast.makeText(a, "Kopiert", android.widget.Toast.LENGTH_SHORT).show()
     }
 }

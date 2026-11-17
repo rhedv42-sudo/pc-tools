@@ -12,6 +12,11 @@ adb shell am start -W -n de.rh.pctools/.MainActivity
 sleep 8
 adb exec-out screencap -p > starttest/start2.png
 adb logcat -d > starttest/logcat2.txt
+adb shell am force-stop de.rh.pctools
+adb shell am start -W -n de.rh.pctools/.MainActivity --ez demo_test true
+sleep 8
+adb exec-out screencap -p > starttest/demo.png
+adb logcat -d > starttest/logcat3.txt
 adb shell dumpsys activity activities | grep -E "mResumedActivity|topResumedActivity" > starttest/activity.txt || true
 CRASH=$(grep -h -A40 -E "FATAL EXCEPTION|AndroidRuntime: " starttest/logcat*.txt | grep -E "AndroidRuntime" | head -60)
 if [ -n "$CRASH" ]; then

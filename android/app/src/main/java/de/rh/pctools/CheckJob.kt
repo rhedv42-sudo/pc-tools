@@ -42,7 +42,7 @@ class CheckJob : JobService() {
         }
 
         fun check(c: Context) {
-            if (!Ha.isSetUp(c)) return
+            if (!Ha.isSetUp(c) || Ha.demo(c)) return
             val pcs = Ha.loadPcs(c)
             val p = Ha.prefs(c)
             val nm = c.getSystemService(NotificationManager::class.java) ?: return

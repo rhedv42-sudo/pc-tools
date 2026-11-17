@@ -25,14 +25,18 @@ object Lock {
     fun deviceSecure(c: Context) = (c.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager).isDeviceSecure
 
     @Volatile private var busy = false
+    @Volatile private var busySince = 0L
+
+    /** true = beim Öffnen muss entsperrt werden. */
+    fun locked(c: Context) = enabled(c) && System.currentTimeMillis() - unlockedAt >= 120_000
 
     /** Beim Öffnen: entsperren, wenn die letzte Entsperrung länger als 2 Minuten her ist.
      *  Läuft schon eine Abfrage (z.B. weil Android beim Anzeigen kurz onPause/onResume auslöst), passiert nichts.
      *  Abbruch schließt die App nicht, sondern zeigt einen Sperrbildschirm mit "Entsperren". */
-    fun requireOpen(a: Activity, onOk: () -> Unit) {
-        if (!enabled(a) || System.currentTimeMillis() - unlockedAt < 120_000) { onOk(); return }
-        if (busy) return
-        auth(a, "PC-Tools entsperren", "Zum Öffnen der App") { ok -> if (ok) onOk() else showLocked(a, onOk) }
+    fun requireOpen(a: Activity, onFail: (() -> Unit)? = null, onOk: () -> Unit) {
+        if (!locked(a)) { onOk(); return }
+        if (busy && System.currentTimeMillis() - busySince < 30_000) { Diag.add(a, "Entsperren läuft schon"); return }
+        auth(a, "PC-Tools entsperren", "Zum Öffnen der App") { ok -> if (ok) onOk() else if (onFail != null) onFail() else showLocked(a, onOk) }
     }
 
     private fun showLocked(a: Activity, onOk: () -> Unit) {
@@ -50,13 +54,14 @@ object Lock {
     /** Vor jedem Auftrag: immer bestätigen. */
     fun confirm(a: Activity, title: String, onOk: () -> Unit) {
         if (!enabled(a)) { onOk(); return }
-        if (busy) return
+        if (busy && System.currentTimeMillis() - busySince < 30_000) return
         auth(a, title, "Zum Senden des Auftrags bestätigen") { ok -> if (ok) onOk() }
     }
 
     private fun auth(a: Activity, title: String, sub: String, done0: (Boolean) -> Unit) {
-        busy = true
-        val done: (Boolean) -> Unit = { r -> busy = false; done0(r) }
+        busy = true; busySince = System.currentTimeMillis()
+        Diag.add(a, "Entsperren gestartet (" + title + ")")
+        val done: (Boolean) -> Unit = { r -> busy = false; Diag.add(a, if (r) "Entsperrt" else "Entsperren abgebrochen"); done0(r) }
         if (!deviceSecure(a)) {
             AlertDialog.Builder(a).setTitle("Keine Displaysperre")
                 .setMessage("Für die App-Sperre braucht das Handy eine Displaysperre (PIN, Muster oder Passwort, gern mit Fingerabdruck). Bitte in den Android-Einstellungen unter Sicherheit einrichten.\n\nSo lange ist die App ungeschützt.")
@@ -77,10 +82,10 @@ object Lock {
                 }
                 b.build().authenticate(CancellationSignal(), a.mainExecutor, object : BiometricPrompt.AuthenticationCallback() {
                     override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) { ok() }
-                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence) { done(false) }
+                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence) { Diag.add(a, "Entsperr-Fehler $errorCode: $errString"); done(false) }
                 })
                 return
-            } catch (e: Exception) { /* weiter mit der Android-Bildschirmsperre */ }
+            } catch (e: Exception) { Diag.add(a, "Fingerabdruck-Abfrage nicht möglich: " + e); /* weiter mit der Android-Bildschirmsperre */ }
         }
         try {
             val km = a.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager

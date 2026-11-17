@@ -20,10 +20,10 @@ class PcActivity : Activity() {
         title = key.uppercase()
         actionBar?.setDisplayHomeAsUpEnabled(true)
         root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Ui.BG); val p = Ui.dp(this@PcActivity, 14); setPadding(p, p, p, p) }
-        setContentView(ScrollView(this).apply { setBackgroundColor(Ui.BG); addView(root) })
+        setContentView(Ui.screen(this, root))
     }
 
-    override fun onResume() { super.onResume(); Lock.requireOpen(this) { load() } }
+    override fun onResume() { super.onResume(); if (Ha.demo(this)) load() else Lock.requireOpen(this) { load() } }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (!Lock.onResult(requestCode, resultCode)) super.onActivityResult(requestCode, resultCode, data)
@@ -49,7 +49,8 @@ class PcActivity : Activity() {
                 val job = Ha.job(this, key)
                 runOnUiThread { show(pc, job) }
             } catch (e: Exception) {
-                runOnUiThread { root.removeAllViews(); root.addView(Ui.text(this, "Fehler: " + (e.message ?: e.toString()))) }
+                Diag.add(this, "PC laden fehlgeschlagen: $e")
+                runOnUiThread { root.removeAllViews(); root.addView(Ui.text(this, "Konnte nicht laden: " + (e.message ?: e.toString()))); root.addView(Ui.button(this, "Erneut versuchen") { load() }) }
             }
         }.start()
     }
@@ -116,7 +117,8 @@ class PcActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle(Ha.jobLabel(action))
             .setMessage("Auftrag „${Ha.jobLabel(action)}“ an ${pc.name} senden?")
-            .setPositiveButton("Senden") { _, _ -> Lock.confirm(this, Ha.jobLabel(action) + " an " + pc.name) {
+            .setPositiveButton("Senden") { _, _ -> if (Ha.demo(this)) { AlertDialog.Builder(this).setTitle("Demo").setMessage("In der Demo wird nichts gesendet. Echt würde der PC den Auftrag „${Ha.jobLabel(action)}“ in spätestens 10 Minuten abholen und hier „läuft“ und danach „erledigt“ melden.").setPositiveButton("OK", null).show(); return@setPositiveButton }
+                Lock.confirm(this, Ha.jobLabel(action) + " an " + pc.name) {
                 Thread {
                     val msg = try { Ha.sendJob(this, pc.key, pc.name, action); "Auftrag gesendet – der PC holt ihn in spätestens 10 Minuten ab." } catch (e: Exception) { "Fehler: " + (e.message ?: e.toString()) }
                     runOnUiThread { AlertDialog.Builder(this).setMessage(msg).setPositiveButton("OK") { _, _ -> load() }.show() }

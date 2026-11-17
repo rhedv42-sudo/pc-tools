@@ -28,7 +28,7 @@ class SetupActivity : Activity() {
             if (t.isBlank()) { state.text = "Bitte das Zugangstoken eingeben."; return@button }
             state.text = "Prüfe …"
             Thread {
-                val msg = Lock.checkUrl(u) ?: try { Ha.test(this, u, t); Ha.save(this, u, t); null } catch (e: Exception) { e.message ?: e.toString() }
+                val msg = Lock.checkUrl(u) ?: try { Ha.test(this, u, t); Ha.save(this, u, t); Ha.setDemo(this, false); Diag.add(this, "Verbindung gespeichert: " + Diag.hostShort(u)); null } catch (e: Exception) { e.message ?: e.toString() }
                 runOnUiThread { if (msg == null) finish() else state.text = "Verbindung fehlgeschlagen: $msg" }
             }.start()
         })
@@ -46,6 +46,7 @@ class SetupActivity : Activity() {
         })
         root.addView(Ui.text(this, "Verbindung: http:// nur im Heimnetz (z.B. http://192.168.1.10:8123), von unterwegs nur https://. Für Aufträge reicht ein Home-Assistant-Benutzer ohne Administratorrechte (z.B. „pctools-app“), wenn der Helfer input_text.pctools_auftrag angelegt ist.", 13f, col = Ui.MUTED))
         root.addView(Ui.text(this, "\nBenachrichtigungen: Die App prüft etwa alle 15 Minuten und meldet sich, wenn ein PC rot wird oder um Hilfe ruft.", 13f, col = Ui.MUTED))
-        setContentView(ScrollView(this).apply { setBackgroundColor(Ui.BG); addView(root) })
+        root.addView(Ui.button(this, "Anleitung & FAQ", false) { startActivity(android.content.Intent(this, HelpActivity::class.java)) })
+        setContentView(Ui.screen(this, root))
     }
 }

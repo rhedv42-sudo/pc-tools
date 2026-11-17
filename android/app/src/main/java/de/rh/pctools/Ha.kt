@@ -60,6 +60,20 @@ object Ha {
 
     fun isSetUp(c: Context) = url(c).isNotBlank() && token(c).isNotBlank()
 
+    fun demo(c: Context) = prefs(c).getBoolean("demo", false)
+    fun setDemo(c: Context, on: Boolean) = prefs(c).edit().putBoolean("demo", on).apply()
+
+    fun niceMillis(ms: Long): String = try {
+        Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("dd.MM. HH:mm"))
+    } catch (e: Exception) { "" }
+
+    /** Zuletzt erfolgreich geladener Stand (zum sofortigen Anzeigen beim Öffnen). */
+    fun cached(c: Context): Pair<List<Pc>, Long>? {
+        if (demo(c)) return null
+        val s = prefs(c).getString("cache", null) ?: return null
+        return try { Pair(parseList(JSONArray(s)), prefs(c).getLong("cache_time", 0L)) } catch (e: Exception) { null }
+    }
+
     fun save(c: Context, url: String, token: String) {
         val u = url.trim().trimEnd('/')
         prefs(c).edit().putString("url", u).putString("token", encrypt(token.trim())).apply()
@@ -104,6 +118,7 @@ object Ha {
 
     private fun request(c: Context, method: String, path: String, body: String? = null, base: String? = null, tok: String? = null): String {
         val b = base ?: url(c)
+        if (b.isBlank()) throw Exception("Noch keine Verbindung eingerichtet (Einstellungen).")
         if (b != checkedBase) { Lock.checkUrl(b)?.let { throw Exception(it) }; checkedBase = b }
         val u = URL(b + path)
         val con = u.openConnection() as HttpURLConnection
@@ -131,7 +146,19 @@ object Ha {
     }
 
     fun loadPcs(c: Context): List<Pc> {
+        if (demo(c)) return parseList(demoStates())
         val arr = JSONArray(request(c, "GET", "/api/states"))
+        val mine = JSONArray()
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            val id = o.optString("entity_id")
+            if (id.startsWith("sensor.pcpflege_") && id.endsWith("_zustand")) mine.put(o)
+        }
+        try { prefs(c).edit().putString("cache", mine.toString()).putLong("cache_time", System.currentTimeMillis()).apply() } catch (_: Exception) { }
+        return parseList(mine)
+    }
+
+    fun parseList(arr: JSONArray): List<Pc> {
         val list = ArrayList<Pc>()
         for (i in 0 until arr.length()) {
             val o = arr.getJSONObject(i)
@@ -141,6 +168,32 @@ object Ha {
             list.add(parse(key, o))
         }
         return list.sortedWith(compareBy<Pc>({ !it.helpOpen }, { rank(it.state) }, { it.name.lowercase() }))
+    }
+
+    /** Beispieldaten für die Demo (nichts wird gesendet). */
+    private fun demoStates(): JSONArray {
+        val now = OffsetDateTime.now()
+        fun pc(key: String, name: String, state: String, score: Int, problems: List<String>, model: String, win: String, free: Int, pct: Int, up: Int, bl: String, blLevel: String, minutesAgo: Long, help: JSONObject?): JSONObject {
+            val a = JSONObject()
+                .put("computer", name).put("score", score).put("problems", JSONArray(problems))
+                .put("last_run", now.minusDays(if (state == "Rot") 23 else 1).toLocalDate().toString())
+                .put("windows", win).put("model", model).put("version", "14.6.2")
+                .put("disk_free_gb", free).put("disk_free_pct", pct).put("uptime_days", up)
+                .put("bitlocker", bl).put("bitlocker_level", blLevel).put("bios", "aktuell")
+                .put("reboot_pending", state == "Rot").put("jobs_enabled", true)
+                .put("jobs", JSONArray(listOf("Status", "Pflege", "Updates", "Aufraeumen", "Virenscan", "Sicherung", "Selbstupdate")))
+            if (help != null) a.put("help", help)
+            return JSONObject().put("entity_id", "sensor.pcpflege_${key}_zustand").put("state", state)
+                .put("last_updated", now.minusMinutes(minutesAgo).toString()).put("attributes", a)
+        }
+        val help = JSONObject().put("open", true).put("time", now.minusMinutes(11).toString())
+            .put("message", "Der Drucker druckt nicht mehr und der PC ist so langsam.")
+            .put("report", "Beispiel-Bericht (Demo)\n\nZustand: Rot, Score 48\n• 3 Windows-Updates offen\n• Datensicherung 23 Tage alt\n• Nur noch 18 GB frei auf C:\n\nFehler der letzten 24 Stunden: 2 (Druckwarteschlange)")
+        return JSONArray()
+            .put(pc("laptop_oma", "LAPTOP-OMA", "Rot", 48, listOf("3 Windows-Updates offen", "Datensicherung 23 Tage alt", "Nur noch 18 GB frei auf C:"), "HP 250 G9", "Windows 11 Home 24H2", 18, 8, 12, "Ein · TPM · Schlüssel: USB, Ausdruck", "OK", 2, help))
+            .put(pc("buero_pc", "BUERO-PC", "Gelb", 74, listOf("1 Programm-Update offen"), "Dell OptiPlex 7010", "Windows 11 Pro 25H2", 64, 27, 3, "Ein · Start-Passwort · Schlüssel: PDF", "OK", 6, null))
+            .put(pc("wohnzimmer_pc", "WOHNZIMMER-PC", "Grün", 92, emptyList(), "Lenovo ThinkPad T14", "Windows 11 Pro 25H2", 212, 44, 1, "Ein · TPM · Schlüssel: USB, Google Drive", "OK", 1, null))
+            .put(pc("kinderzimmer", "KINDERZIMMER", "Grün", 88, emptyList(), "Acer Aspire 5", "Windows 11 Home 25H2", 140, 58, 2, "Aus · nicht verschlüsselt", "Warn", 180, null))
     }
 
     fun rank(state: String) = when (state) { "Rot" -> 0; "Gelb" -> 1; "Grün" -> 2; else -> 3 }
@@ -180,6 +233,7 @@ object Ha {
     }
 
     fun job(c: Context, key: String): Job? {
+        if (demo(c)) return null
         return try {
             val o = JSONObject(request(c, "GET", "/api/states/sensor.pcpflege_${key}_auftrag"))
             val a = o.optJSONObject("attributes") ?: JSONObject()
@@ -188,6 +242,7 @@ object Ha {
     }
 
     fun sendJob(c: Context, key: String, name: String, action: String) {
+        if (demo(c)) throw Exception("Demo: Es wurde nichts gesendet. Richte unter Einstellungen die Verbindung zu Home Assistant ein, um echte Aufträge zu schicken.")
         val now = OffsetDateTime.now().toString()
         val body = JSONObject()
             .put("state", action)
