@@ -28,6 +28,16 @@ class MainActivity : Activity() {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
         CheckJob.schedule(this)
+        Ha.prefs(this).getString("crash", null)?.let { c ->
+            Ha.prefs(this).edit().remove("crash").apply()
+            android.app.AlertDialog.Builder(this).setTitle("Die App ist zuletzt abgestürzt")
+                .setMessage("Bitte diesen Text kopieren und an den Entwickler schicken (GitHub-Issue):\n\n" + c)
+                .setPositiveButton("Kopieren") { _, _ ->
+                    (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("PC-Tools-App Absturz", c))
+                    android.widget.Toast.makeText(this, "Kopiert", android.widget.Toast.LENGTH_SHORT).show()
+                }
+                .setNegativeButton("Schließen", null).show()
+        }
     }
 
     override fun onResume() {

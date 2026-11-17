@@ -24,19 +24,39 @@ object Lock {
 
     fun deviceSecure(c: Context) = (c.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager).isDeviceSecure
 
-    /** Beim Öffnen: entsperren, wenn die letzte Entsperrung länger als 2 Minuten her ist. */
+    @Volatile private var busy = false
+
+    /** Beim Öffnen: entsperren, wenn die letzte Entsperrung länger als 2 Minuten her ist.
+     *  Läuft schon eine Abfrage (z.B. weil Android beim Anzeigen kurz onPause/onResume auslöst), passiert nichts.
+     *  Abbruch schließt die App nicht, sondern zeigt einen Sperrbildschirm mit "Entsperren". */
     fun requireOpen(a: Activity, onOk: () -> Unit) {
         if (!enabled(a) || System.currentTimeMillis() - unlockedAt < 120_000) { onOk(); return }
-        auth(a, "PC-Tools entsperren", "Zum Öffnen der App") { ok -> if (ok) onOk() else a.finishAffinity() }
+        if (busy) return
+        auth(a, "PC-Tools entsperren", "Zum Öffnen der App") { ok -> if (ok) onOk() else showLocked(a, onOk) }
+    }
+
+    private fun showLocked(a: Activity, onOk: () -> Unit) {
+        if (a.isFinishing || a.isDestroyed) return
+        val box = android.widget.LinearLayout(a).apply {
+            orientation = android.widget.LinearLayout.VERTICAL; gravity = android.view.Gravity.CENTER; setBackgroundColor(Ui.BG)
+            val p = Ui.dp(a, 32); setPadding(p, p, p, p)
+        }
+        box.addView(Ui.text(a, "PC-Tools ist gesperrt", 22f, true).apply { gravity = android.view.Gravity.CENTER })
+        box.addView(Ui.text(a, "Zum Öffnen mit Fingerabdruck, Gesicht oder Handy-PIN entsperren.", 15f, col = Ui.MUTED).apply { gravity = android.view.Gravity.CENTER; setPadding(0, Ui.dp(a, 8), 0, Ui.dp(a, 20)) })
+        box.addView(Ui.button(a, "Entsperren") { requireOpen(a) { a.recreate() } })
+        a.setContentView(box)
     }
 
     /** Vor jedem Auftrag: immer bestätigen. */
     fun confirm(a: Activity, title: String, onOk: () -> Unit) {
         if (!enabled(a)) { onOk(); return }
+        if (busy) return
         auth(a, title, "Zum Senden des Auftrags bestätigen") { ok -> if (ok) onOk() }
     }
 
-    private fun auth(a: Activity, title: String, sub: String, done: (Boolean) -> Unit) {
+    private fun auth(a: Activity, title: String, sub: String, done0: (Boolean) -> Unit) {
+        busy = true
+        val done: (Boolean) -> Unit = { r -> busy = false; done0(r) }
         if (!deviceSecure(a)) {
             AlertDialog.Builder(a).setTitle("Keine Displaysperre")
                 .setMessage("Für die App-Sperre braucht das Handy eine Displaysperre (PIN, Muster oder Passwort, gern mit Fingerabdruck). Bitte in den Android-Einstellungen unter Sicherheit einrichten.\n\nSo lange ist die App ungeschützt.")
@@ -47,18 +67,22 @@ object Lock {
         }
         val ok: () -> Unit = { unlockedAt = System.currentTimeMillis(); done(true) }
         if (Build.VERSION.SDK_INT >= 28) {
-            val b = BiometricPrompt.Builder(a).setTitle(title).setSubtitle(sub)
-            if (Build.VERSION.SDK_INT >= 30) {
-                b.setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_WEAK or BiometricManager.Authenticators.DEVICE_CREDENTIAL)
-            } else {
-                @Suppress("DEPRECATION")
-                b.setDeviceCredentialAllowed(true)
-            }
-            b.build().authenticate(CancellationSignal(), a.mainExecutor, object : BiometricPrompt.AuthenticationCallback() {
-                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) { ok() }
-                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) { done(false) }
-            })
-        } else {
+            try {
+                val b = BiometricPrompt.Builder(a).setTitle(title).setSubtitle(sub)
+                if (Build.VERSION.SDK_INT >= 30) {
+                    b.setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_WEAK or BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+                } else {
+                    @Suppress("DEPRECATION")
+                    b.setDeviceCredentialAllowed(true)
+                }
+                b.build().authenticate(CancellationSignal(), a.mainExecutor, object : BiometricPrompt.AuthenticationCallback() {
+                    override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) { ok() }
+                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence) { done(false) }
+                })
+                return
+            } catch (e: Exception) { /* weiter mit der Android-Bildschirmsperre */ }
+        }
+        try {
             val km = a.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
             @Suppress("DEPRECATION")
             val i = km.createConfirmDeviceCredentialIntent(title, sub)
@@ -66,7 +90,7 @@ object Lock {
             pending = { r -> if (r) ok() else done(false) }
             @Suppress("DEPRECATION")
             a.startActivityForResult(i, REQ)
-        }
+        } catch (e: Exception) { done(false) }
     }
 
     /** Aus onActivityResult der Activities aufrufen (nur Android 8/8.1). */
