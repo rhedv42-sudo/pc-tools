@@ -49,14 +49,21 @@ jobs:
           path: starttest/
       - name: Bildschirmfotos in Zweig ci-screens ablegen
         if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           [ -d starttest ] || exit 0
-          mkdir -p /tmp/shots && for f in starttest/*.png; do [ -f "$f" ] && cp "$f" "/tmp/shots/api${{ matrix.api }}-$(basename "$f")"; done
-          cp starttest/crash.txt "/tmp/shots/api${{ matrix.api }}-crash.txt" 2>/dev/null || true
-          grep -h "PcTools\|de.rh.pctools" starttest/logcat*.txt | tail -60 > "/tmp/shots/api${{ matrix.api }}-log.txt" || true
-          git config user.name "github-actions"; git config user.email "github-actions@users.noreply.github.com"
-          for i in 1 2 3; do
-            rm -rf /tmp/cs && git clone -q --depth 1 -b ci-screens "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" /tmp/cs 2>/dev/null || { mkdir -p /tmp/cs && cd /tmp/cs && git init -q && git checkout -q -b ci-screens && git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}"; cd - >/dev/null; }
-            cp /tmp/shots/* /tmp/cs/ && cd /tmp/cs && git add -A && git commit -q -m "Starttest API ${{ matrix.api }} ${{ github.sha }}" && git push -q origin ci-screens && break
-            cd - >/dev/null; sleep $((RANDOM % 10 + 5))
+          R=${{ github.repository }}
+          gh api -X POST repos/$R/git/refs -f ref=refs/heads/ci-screens -f sha=${{ github.sha }} >/dev/null 2>&1 || true
+          grep -h "pctools\|PcTools\|AndroidRuntime" starttest/logcat*.txt | tail -80 > starttest/log.txt || true
+          for f in starttest/*.png starttest/log.txt starttest/crash.txt; do
+            [ -f "$f" ] || continue
+            dest="api${{ matrix.api }}-$(basename "$f")"
+            old=$(gh api "repos/$R/contents/$dest?ref=ci-screens" --jq .sha 2>/dev/null || true)
+            base64 -w0 "$f" > /tmp/b64
+            if [ -n "$old" ]; then
+              gh api -X PUT "repos/$R/contents/$dest" -f message="Starttest $dest" -f branch=ci-screens -f sha="$old" -F content=@/tmp/b64 >/dev/null && echo "::notice::abgelegt $dest" || echo "::warning::nicht abgelegt $dest"
+            else
+              gh api -X PUT "repos/$R/contents/$dest" -f message="Starttest $dest" -f branch=ci-screens -F content=@/tmp/b64 >/dev/null && echo "::notice::abgelegt $dest" || echo "::warning::nicht abgelegt $dest"
+            fi
           done
