@@ -3,7 +3,7 @@
 "language": "简体中文",
 "code": "zh-CN",
 "status": "machine",
-"app": "14.6.1",
+"app": "14.6.2",
 "source": "de-DE",
 "note": "Maschinell übersetzt (KI) - Fehler bitte über \"Übersetzungsfehler melden\" in PC-Tools oder als GitHub-Issue melden."
 },
@@ -14324,6 +14324,13 @@
 "✗ Lizenz-Tresor:": "✗ 许可证保管库：",
 "✗ Ordner:": "✗ 文件夹：",
 "✗ PC-Tools-Ordner:": "✗ PC-Tools 文件夹：",
-"✗ USB-Stick:": "✗ U 盘："
+"✗ USB-Stick:": "✗ U 盘：",
+"Gefällt dir PC-Tools?": "喜欢 PC-Tools 吗？",
+"PC-Tools hat deinen PC schon {0}-mal gepflegt. Es ist kostenlos, ohne Werbung und ein Hobby-Projekt.": "PC-Tools 已经为你的电脑维护了 {0} 次。它免费、无广告，是一个个人业余项目。",
+"Wenn es dir hilft: Ein Stern auf GitHub zeigt anderen, dass sich PC-Tools lohnt. Das dauert 10 Sekunden (kostenloses GitHub-Konto nötig).": "如果它对你有帮助：在 GitHub 上点一颗星，可以让更多人知道 PC-Tools 值得一用。只需 10 秒（需要免费的 GitHub 账号）。",
+"Oder erzähl einfach jemandem davon, dem es auch helfen könnte.": "或者把它推荐给同样用得上的人。",
+"★ Stern auf GitHub geben": "★ 在 GitHub 上点星",
+"Idee oder Fehler melden": "提出建议或报告错误",
+"Nicht mehr fragen": "不再询问"
 }
 }

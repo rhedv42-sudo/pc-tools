@@ -3,7 +3,7 @@
 "language": "Português (Brasil)",
 "code": "pt-BR",
 "status": "machine",
-"app": "14.6.1",
+"app": "14.6.2",
 "source": "de-DE",
 "note": "Maschinell übersetzt (KI) - Fehler bitte über \"Übersetzungsfehler melden\" in PC-Tools oder als GitHub-Issue melden."
 },
@@ -14181,6 +14181,13 @@
 "✗ Lizenz-Tresor:": "✗ Cofre de licenças:",
 "✗ Ordner:": "✗ Pasta:",
 "✗ PC-Tools-Ordner:": "✗ Pasta do PC-Tools:",
-"✗ USB-Stick:": "✗ Pen drive:"
+"✗ USB-Stick:": "✗ Pen drive:",
+"Gefällt dir PC-Tools?": "Está gostando do PC-Tools?",
+"PC-Tools hat deinen PC schon {0}-mal gepflegt. Es ist kostenlos, ohne Werbung und ein Hobby-Projekt.": "O PC-Tools já cuidou do seu PC {0} vezes. Ele é gratuito, sem anúncios e um projeto pessoal.",
+"Wenn es dir hilft: Ein Stern auf GitHub zeigt anderen, dass sich PC-Tools lohnt. Das dauert 10 Sekunden (kostenloses GitHub-Konto nötig).": "Se ele te ajuda: uma estrela no GitHub mostra aos outros que o PC-Tools vale a pena. Leva 10 segundos (é preciso uma conta gratuita do GitHub).",
+"Oder erzähl einfach jemandem davon, dem es auch helfen könnte.": "Ou simplesmente conte para alguém que também possa se beneficiar.",
+"★ Stern auf GitHub geben": "★ Dar uma estrela no GitHub",
+"Idee oder Fehler melden": "Sugerir uma ideia ou relatar um erro",
+"Nicht mehr fragen": "Não perguntar novamente"
 }
 }

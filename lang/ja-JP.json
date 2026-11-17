@@ -3,7 +3,7 @@
 "language": "日本語",
 "code": "ja-JP",
 "status": "machine",
-"app": "14.6.1",
+"app": "14.6.2",
 "source": "de-DE",
 "note": "Maschinell übersetzt (KI) - Fehler bitte über \"Übersetzungsfehler melden\" in PC-Tools oder als GitHub-Issue melden."
 },
@@ -14247,6 +14247,13 @@
 "✗ Lizenz-Tresor:": "✗ ライセンス保管庫:",
 "✗ Ordner:": "✗ フォルダー:",
 "✗ PC-Tools-Ordner:": "✗ PC-Tools フォルダー:",
-"✗ USB-Stick:": "✗ USB メモリ:"
+"✗ USB-Stick:": "✗ USB メモリ:",
+"Gefällt dir PC-Tools?": "PC-Tools は気に入っていただけましたか？",
+"PC-Tools hat deinen PC schon {0}-mal gepflegt. Es ist kostenlos, ohne Werbung und ein Hobby-Projekt.": "PC-Tools はすでにこの PC を {0} 回メンテナンスしました。無料・広告なしの個人プロジェクトです。",
+"Wenn es dir hilft: Ein Stern auf GitHub zeigt anderen, dass sich PC-Tools lohnt. Das dauert 10 Sekunden (kostenloses GitHub-Konto nötig).": "お役に立っているなら：GitHub でスターを付けると、PC-Tools が役立つことを他の人に伝えられます。10 秒で完了します（無料の GitHub アカウントが必要）。",
+"Oder erzähl einfach jemandem davon, dem es auch helfen könnte.": "または、役立ちそうな方にぜひ紹介してください。",
+"★ Stern auf GitHub geben": "★ GitHub でスターを付ける",
+"Idee oder Fehler melden": "アイデアの提案・不具合の報告",
+"Nicht mehr fragen": "今後表示しない"
 }
 }

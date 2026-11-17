@@ -3,7 +3,7 @@
 "language": "Türkçe",
 "code": "tr-TR",
 "status": "machine",
-"app": "14.6.1",
+"app": "14.6.2",
 "source": "de-DE",
 "note": "Maschinell übersetzt (KI) - Fehler bitte über \"Übersetzungsfehler melden\" in PC-Tools oder als GitHub-Issue melden."
 },
@@ -14227,6 +14227,13 @@
 "✗ Lizenz-Tresor:": "✗ Lisans kasası:",
 "✗ Ordner:": "✗ Klasör:",
 "✗ PC-Tools-Ordner:": "✗ PC-Tools klasörü:",
-"✗ USB-Stick:": "✗ USB bellek:"
+"✗ USB-Stick:": "✗ USB bellek:",
+"Gefällt dir PC-Tools?": "PC-Tools hoşuna gitti mi?",
+"PC-Tools hat deinen PC schon {0}-mal gepflegt. Es ist kostenlos, ohne Werbung und ein Hobby-Projekt.": "PC-Tools bilgisayarının bakımını şimdiden {0} kez yaptı. Ücretsiz, reklamsız ve bir hobi projesi.",
+"Wenn es dir hilft: Ein Stern auf GitHub zeigt anderen, dass sich PC-Tools lohnt. Das dauert 10 Sekunden (kostenloses GitHub-Konto nötig).": "Sana yardımcı oluyorsa: GitHub’da bir yıldız, PC-Tools’un değerli olduğunu başkalarına gösterir. 10 saniye sürer (ücretsiz GitHub hesabı gerekir).",
+"Oder erzähl einfach jemandem davon, dem es auch helfen könnte.": "Ya da işine yarayabilecek birine anlatman yeterli.",
+"★ Stern auf GitHub geben": "★ GitHub’da yıldız ver",
+"Idee oder Fehler melden": "Fikir öner veya hata bildir",
+"Nicht mehr fragen": "Bir daha sorma"
 }
 }

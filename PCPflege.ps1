@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Auto, [switch]$Run, [string]$Parts = '', [switch]$Analyze, [switch]$CheckOnly, [string]$RunId = '', [string]$AppsFile = '', [string]$WingetFile = '', [string]$DirectFile = '', [string]$Monitor = '', [switch]$DeskArrange, [string]$Topology = '', [int]$Delay = 0, [switch]$Silent, [switch]$Install, [string]$JobFile = '', [switch]$Backup, [switch]$FleetPoll, [string]$FirstLogon = '', [switch]$NetDiag, [switch]$TbSync, [switch]$WinRepair, [switch]$NetDeep, [string]$DeepOpts = '', [switch]$FullBackup, [switch]$FullRepair, [switch]$NetDoc, [switch]$Sign, [string]$SignOpts = '', [string]$ChocoFile = '')
 
-$AppVersion = '14.6.1'
+$AppVersion = '14.6.2'
 $DefaultUpdateSource = 'github:rhedv42-sudo/pc-tools@stable'
 # Portabel (USB-Stick): Datei portable.txt neben dem Skript -> Einstellungen/Protokolle im Ordner Daten auf dem Stick
 $Script:IsPortable = [bool]($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'portable.txt')))
@@ -1492,6 +1492,12 @@ function Invoke-PflegeRun {
                 Dauer       = ('{0:hh\:mm\:ss}' -f $dur)
                 Log         = $Script:LogFile
             } | ConvertTo-Json | Set-Content -Path (Join-Path $Script:DataDir 'lastrun.json') -Encoding UTF8
+            # Zähler für die einmalige Stern-Frage (nur Anzahl der Läufe, nichts wird gesendet)
+            try {
+                $sf = Join-Path $Script:DataDir 'sterne.json'; $so = $null
+                if (Test-Path -LiteralPath $sf) { try { $so = Get-Content -LiteralPath $sf -Raw -Encoding UTF8 | ConvertFrom-Json } catch { } }
+                [ordered]@{ Runs = $(if ($so) { [int]$so.Runs + 1 } else { 1 }); Done = [bool]($so -and $so.Done); Next = $(if ($so) { [string]$so.Next } else { '' }) } | ConvertTo-Json | Set-Content -LiteralPath $sf -Encoding UTF8
+            } catch { }
         }
     }
     catch { Write-PLog ('Unerwarteter Fehler: {0}' -f $_.Exception.Message) 'FEHLER' }
@@ -22255,6 +22261,7 @@ $pageSecurity = New-Page 'Sicherheit' 'Alle Schutzfunktionen dieses PCs auf eine
 
 # ---------------------------------------------------------------- Handbuch (wird mit jeder Version gepflegt)
 $ManualNews = @(
+    'Version 14.6.2: Nach einigen Pflegeläufen fragt PC-Tools einmal freundlich, ob du das Projekt mit einem Stern auf GitHub unterstützen möchtest - mit "Später" und "Nicht mehr fragen", nie im Einfach-Modus. Es wird dabei nichts übertragen.',
     'Version 14.6.1: Aufträge aus der Android-App gehen jetzt auch mit einem Home-Assistant-Benutzer ohne Administratorrechte - PC-Tools liest dafür zusätzlich den Helfer input_text.pctools_auftrag. Aufträge ohne Zeitangabe werden abgelehnt.',
     'Version 14.6: Neu: Was-ist-neu-Fenster nach jedem Update - zeigt alles, was seit deiner letzten Version dazugekommen ist. Neu: BIOS-Prüfung für Lenovo, HP und Dell - PC-Tools fragt einmal am Tag den Katalog des Herstellers, zeigt ein neues BIOS in der Ampel und meldet es. Neu in Meine PCs: Spalte BitLocker - ist BitLocker an, wie geschützt (TPM/Start-Passwort) und wo ist der Schlüssel gesichert (USB, Cloud, Ausdruck, Microsoft-Konto ...). Der Schlüssel selbst wird nie übertragen. Neu: Home Assistant bekommt Score, BitLocker, BIOS und offene Hilferufe - und PC-Tools kann Aufträge aus Home Assistant bzw. der neuen Android-App annehmen (Pflege, Updates, Aufräumen, Virenscan, Sicherung, Zustand, Selbstupdate).',
     'Version 14.5: BitLocker-Schlüssel als PDF - Seite Sicherheit > "Schlüssel als PDF sichern". Die PDF enthält alle Angaben zum PC (Modell, Seriennummer, Windows, BIOS, Secure Boot, TPM), für jedes verschlüsselte Laufwerk Schlüssel-ID, Kurzkennung und den 48-stelligen Schlüssel groß lesbar, eine Anleitung zur Eingabe und Tipps zur Aufbewahrung. Speichern mit einem Klick auf USB-Stick, in Cloud-Ordner (OneDrive, Google Drive, Dropbox, Nextcloud, iCloud - werden automatisch gefunden) oder einen anderen Ordner/NAS, jede Kopie wird geprüft. Der BitLocker-Assistent legt die PDF jetzt automatisch neben jede Schlüsseldatei und öffnet sie zum Drucken.',
@@ -30405,7 +30412,56 @@ function Show-FirstRunOrNews {
             'Tipp: Keine Technik-Kenntnisse nötig - der grüne Knopf "Alles automatisch" erledigt alles von selbst.'))), (T ('PC-Tools - Willkommen')), 'OK', 'Information') | Out-Null
         return
     }
-    if ($last -ne [string]$AppVersion -and -not (Test-Path -LiteralPath (Join-Path $DataDir 'neuigkeiten-aus.txt'))) { try { Show-WhatsNew $last } catch { } }
+    if ($last -ne [string]$AppVersion -and -not (Test-Path -LiteralPath (Join-Path $DataDir 'neuigkeiten-aus.txt'))) { try { Show-WhatsNew $last } catch { }; return }
+    try { Show-StarAsk } catch { }
+}
+# Einmalige, freundliche Frage nach einem GitHub-Stern: frühestens nach 5 Pflegeläufen, nie im Einfach-Modus,
+# "Später" = in 30 Tagen erneut, "Nicht mehr fragen" bzw. Stern = nie wieder. Es wird nichts übertragen.
+function Save-StarState([bool]$Done, [int]$Days) {
+    try { [ordered]@{ Runs = [int]$script:StarRuns; Done = $Done; Next = $(if ($Days -gt 0) { (Get-Date).AddDays($Days).ToString('yyyy-MM-dd') } else { '' }) } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $DataDir 'sterne.json') -Encoding UTF8 } catch { }
+}
+function Show-StarAsk([switch]$Force) {
+    $sf = Join-Path $DataDir 'sterne.json'
+    $so = $null; if (Test-Path -LiteralPath $sf) { try { $so = Get-Content -LiteralPath $sf -Raw -Encoding UTF8 | ConvertFrom-Json } catch { } }
+    $script:StarRuns = $(if ($so) { [int]$so.Runs } else { 0 })
+    if (-not $Force) {
+        if (-not $so -or $so.Done -or $script:StarRuns -lt 5) { return }
+        if (Test-Path -LiteralPath (Join-Path $DataDir 'einfach.txt')) { return }
+        if ($so.Next) { try { if ((Get-Date) -lt [datetime]::ParseExact([string]$so.Next, 'yyyy-MM-dd', $null)) { return } } catch { } }
+    }
+    $x = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="PC-Tools" Width="540" SizeToContent="Height" ResizeMode="NoResize" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI" FontSize="13.5" Background="#F4F6FA">
+  <StackPanel Margin="26,22,26,22">
+    <TextBlock Text="&#x2605;" FontSize="44" Foreground="#F59E0B" HorizontalAlignment="Center"/>
+    <TextBlock x:Name="SaHead" FontSize="22" FontWeight="SemiBold" Foreground="#1F2A44" HorizontalAlignment="Center" Margin="0,2,0,10"/>
+    <TextBlock x:Name="SaText" TextWrapping="Wrap" Foreground="#475569" TextAlignment="Center" LineHeight="20"/>
+    <Button x:Name="SaStar" Padding="18,10" Margin="0,18,0,0" FontWeight="SemiBold" FontSize="14.5" IsDefault="True"/>
+    <WrapPanel HorizontalAlignment="Center" Margin="0,10,0,0">
+      <Button x:Name="SaIdea" Padding="12,6" Margin="0,0,8,0"/>
+      <Button x:Name="SaLater" Padding="12,6" Margin="0,0,8,0" IsCancel="True"/>
+      <Button x:Name="SaNever" Padding="12,6"/>
+    </WrapPanel>
+  </StackPanel>
+</Window>
+"@
+    $w = [Windows.Markup.XamlReader]::Parse((Convert-ThemeXaml $x)); try { $w.Owner = $window } catch { }
+    $nl = [Environment]::NewLine
+    $w.FindName('SaHead').Text = (T 'Gefällt dir PC-Tools?')
+    $w.FindName('SaText').Text = ((T 'PC-Tools hat deinen PC schon {0}-mal gepflegt. Es ist kostenlos, ohne Werbung und ein Hobby-Projekt.') -f $script:StarRuns) + $nl + $nl +
+        (T 'Wenn es dir hilft: Ein Stern auf GitHub zeigt anderen, dass sich PC-Tools lohnt. Das dauert 10 Sekunden (kostenloses GitHub-Konto nötig).') + $nl + $nl +
+        (T 'Oder erzähl einfach jemandem davon, dem es auch helfen könnte.')
+    $w.FindName('SaStar').Content = (T '★ Stern auf GitHub geben')
+    $w.FindName('SaIdea').Content = (T 'Idee oder Fehler melden')
+    $w.FindName('SaLater').Content = (T 'Später')
+    $w.FindName('SaNever').Content = (T 'Nicht mehr fragen')
+    $script:SaWin = $w; $script:SaDone = $false
+    $w.FindName('SaStar').Add_Click({ try { Start-Process 'https://github.com/rhedv42-sudo/pc-tools' } catch { }; Save-StarState $true 0; $script:SaDone = $true; $script:SaWin.Close() })
+    $w.FindName('SaIdea').Add_Click({ try { Start-Process 'https://github.com/rhedv42-sudo/pc-tools/discussions' } catch { }; Save-StarState $false 30; $script:SaDone = $true; $script:SaWin.Close() })
+    $w.FindName('SaNever').Add_Click({ Save-StarState $true 0; $script:SaDone = $true; $script:SaWin.Close() })
+    $w.FindName('SaLater').Add_Click({ $script:SaWin.Close() })
+    $w.Add_Closed({ if (-not $script:SaDone) { Save-StarState $false 30 } })
+    [void]$w.ShowDialog()
 }
 function Show-WhatsNew([string]$Since = '') {
     $sv = $null; try { if ($Since) { $sv = [version](($Since -split '[^0-9.]')[0]) } } catch { }
