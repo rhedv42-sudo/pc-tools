@@ -26,17 +26,22 @@ class MainActivity : Activity() {
     private lateinit var progress: ProgressBar
     private lateinit var list: LinearLayout
     @Volatile private var loading = false
+    private lateinit var heroTitle: TextView
+    private lateinit var heroStats: LinearLayout
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        title = "PC-Tools – Meine PCs"
+        title = "PC-Tools"
         if (intent?.getBooleanExtra("demo_test", false) == true) Ha.setDemo(this, true)
         Diag.add(this, "App gestartet (" + BuildConfigLite.version(this) + ", Android " + Build.VERSION.RELEASE + ")")
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Ui.BG); val p = Ui.dp(this@MainActivity, 14); setPadding(p, p, p, p) }
-        val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        progress = ProgressBar(this).apply { isIndeterminate = true; visibility = View.GONE; layoutParams = LinearLayout.LayoutParams(Ui.dp(this@MainActivity, 18), Ui.dp(this@MainActivity, 18)).apply { setMargins(0, 0, Ui.dp(this@MainActivity, 8), 0) } }
-        status = Ui.text(this, "Wird vorbereitet …", 13f, col = Ui.MUTED)
-        bar.addView(progress); bar.addView(status)
+        val bar = Ui.hero(this, R.drawable.ic_s_pcs, "Meine PCs", "Wird vorbereitet …")
+        status = bar.findViewWithTag("sub")
+        heroTitle = bar.findViewWithTag("title")
+        progress = ProgressBar(this).apply { isIndeterminate = true; visibility = View.GONE; indeterminateTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.WHITE); layoutParams = LinearLayout.LayoutParams(Ui.dp(this@MainActivity, 22), Ui.dp(this@MainActivity, 22)) }
+        (bar.getChildAt(0) as LinearLayout).addView(progress)
+        heroStats = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; visibility = View.GONE }
+        bar.addView(heroStats)
         top = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, Ui.dp(this@MainActivity, 8), 0, 0) }
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(bar); root.addView(top); root.addView(list)
@@ -101,28 +106,30 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- Zustände
     private fun showWelcome() {
-        status.text = "Noch nicht eingerichtet"
+        status.text = "Noch nicht eingerichtet"; heroTitle.text = "Willkommen"; heroStats.visibility = View.GONE
         top.removeAllViews(); list.removeAllViews()
         val c = Ui.card(this)
-        c.addView(Ui.text(this, "Willkommen bei der PC-Tools-App", 20f, true))
+        c.addView(Ui.heading(this, R.drawable.ic_s_pcs, Ui.BLUE, "Willkommen bei der PC-Tools-App"))
         c.addView(Ui.text(this, "Die App zeigt dir alle PCs, die PC-Tools pflegt – mit Ampel, Hilferufen und Hinweisen – und schickt Aufträge wie Pflege oder Updates. Die Daten kommen über deinen eigenen Home Assistant, nicht über eine fremde Cloud.", 15f, col = Ui.MUTED).apply { setPadding(0, Ui.dp(this@MainActivity, 6), 0, Ui.dp(this@MainActivity, 10)) })
-        c.addView(Ui.button(this, "Verbindung einrichten") { startActivity(Intent(this, SetupActivity::class.java)) })
-        c.addView(Ui.button(this, "Erst mal Demo ansehen", false) { Ha.setDemo(this, true); invalidateOptionsMenu(); load() })
-        c.addView(Ui.button(this, "Anleitung & FAQ", false) { startActivity(Intent(this, HelpActivity::class.java)) })
+        c.addView(Ui.button(this, "Verbindung einrichten", true, R.drawable.ic_s_link) { startActivity(Intent(this, SetupActivity::class.java)) })
+        c.addView(Ui.button(this, "Erst mal Demo ansehen", false, R.drawable.ic_s_play) { Ha.setDemo(this, true); invalidateOptionsMenu(); load() })
+        c.addView(Ui.button(this, "Anleitung & FAQ", false, R.drawable.ic_s_book) { startActivity(Intent(this, HelpActivity::class.java)) })
         list.addView(c)
         val n = Ui.card(this)
-        n.addView(Ui.text(this, "Was du brauchst", 16f, true))
-        n.addView(Ui.text(this, "1. PC-Tools 14.6 oder neuer auf den PCs, dort unter Meine PCs > Anbindung „Home Assistant direkt“ eingeschaltet.\n2. Home Assistant (zu Hause oder über Nabu Casa).\n3. Ein langlebiges Zugangstoken aus Home Assistant.", 14f).apply { setPadding(0, Ui.dp(this@MainActivity, 6), 0, 0) })
+        n.addView(Ui.heading(this, R.drawable.ic_s_checkcircle, Ui.GREEN, "Was du brauchst"))
+        for ((ic, t) in listOf(R.drawable.ic_s_windows to "PC-Tools 14.6 oder neuer auf den PCs, mit „Home Assistant direkt“ (Meine PCs > Anbindung)", R.drawable.ic_s_server to "Home Assistant – zu Hause oder über Nabu Casa", R.drawable.ic_s_key to "Ein langlebiges Zugangstoken aus Home Assistant"))
+            n.addView(LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, Ui.dp(this@MainActivity, 5), 0, Ui.dp(this@MainActivity, 5))
+                addView(Ui.tile(this@MainActivity, ic, Ui.PURPLE, 30)); addView(Ui.text(this@MainActivity, t, 14f).apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) }) })
         list.addView(n)
     }
 
     private fun showLockedHint() {
-        status.text = "Gesperrt"
+        status.text = "Gesperrt"; heroStats.visibility = View.GONE
         top.removeAllViews()
         val c = Ui.card(this)
-        c.addView(Ui.text(this, "PC-Tools ist gesperrt", 18f, true))
+        c.addView(Ui.heading(this, R.drawable.ic_s_lock, Ui.BLUE, "PC-Tools ist gesperrt"))
         c.addView(Ui.text(this, "Zum Öffnen mit Fingerabdruck, Gesicht oder Handy-PIN entsperren.", 14f, col = Ui.MUTED).apply { setPadding(0, Ui.dp(this@MainActivity, 4), 0, Ui.dp(this@MainActivity, 6)) })
-        c.addView(Ui.button(this, "Entsperren") { Lock.requireOpen(this, onFail = { showLockedHint() }) { top.removeAllViews(); load() } })
+        c.addView(Ui.button(this, "Entsperren", true, R.drawable.ic_s_finger) { Lock.requireOpen(this, onFail = { showLockedHint() }) { top.removeAllViews(); load() } })
         top.addView(c)
         list.removeAllViews()
     }
@@ -131,6 +138,7 @@ class MainActivity : Activity() {
         if (loading) return
         loading = true
         progress.visibility = View.VISIBLE
+        heroTitle.text = if (Ha.demo(this)) "Demo" else heroTitle.text
         status.text = if (Ha.demo(this)) "Demo wird geladen …" else "Lade von " + Diag.hostShort(Ha.url(this)) + " …"
         Diag.add(this, "Laden gestartet")
         Thread {
@@ -149,15 +157,15 @@ class MainActivity : Activity() {
         top.removeAllViews()
         if (Ha.demo(this)) {
             val c = Ui.card(this).apply { background = (background as android.graphics.drawable.GradientDrawable).apply { setColor(0xFFFFF7ED.toInt()); setStroke(Ui.dp(this@MainActivity, 1), 0xFFFED7AA.toInt()) } }
-            c.addView(Ui.text(this, "Demo – Beispieldaten", 16f, true, 0xFF9A3412.toInt()))
+            c.addView(Ui.heading(this, R.drawable.ic_s_play, 0xFFEA580C.toInt(), "Demo – Beispieldaten"))
             c.addView(Ui.text(this, "So sieht die App mit vier PCs aus. Aufträge werden in der Demo nicht gesendet.", 14f, col = 0xFF9A3412.toInt()))
             c.addView(Ui.button(this, "Demo beenden", false) { Ha.setDemo(this, false); invalidateOptionsMenu(); list.removeAllViews(); onResume() })
             top.addView(c)
         }
         Update.known(this)?.let { u ->
             val c = Ui.card(this)
-            c.addView(Ui.text(this, "Neue App-Version ${u.version} verfügbar", 16f, true, Ui.BLUE))
-            c.addView(Ui.button(this, "Ansehen und herunterladen", false) { Ui.open(this, u.url) })
+            c.addView(Ui.heading(this, R.drawable.ic_s_download, Ui.BLUE, "Neue App-Version ${u.version}", "Updates lassen sich jetzt einfach drüber installieren."))
+            c.addView(Ui.button(this, "Ansehen und herunterladen", true, R.drawable.ic_s_download) { Ui.open(this, u.url) })
             top.addView(c)
         }
     }
@@ -166,43 +174,72 @@ class MainActivity : Activity() {
         showTopHints()
         list.removeAllViews()
         status.text = note ?: ((if (Ha.demo(this)) "Demo · " else "") + "Stand " + java.time.LocalTime.now().withNano(0).withSecond(0))
+        heroTitle.text = if (pcs.isEmpty()) "Meine PCs" else if (pcs.size == 1) "1 PC im Blick" else "${pcs.size} PCs im Blick"
+        heroStats.removeAllViews()
         if (pcs.isEmpty()) {
+            heroStats.visibility = View.GONE
             val c = Ui.card(this)
-            c.addView(Ui.text(this, "Verbunden – aber noch keine PCs", 18f, true))
-            c.addView(Ui.text(this, "Home Assistant antwortet, meldet aber noch keinen PC. So kommen die PCs dazu:\n\n1. Auf jedem PC PC-Tools öffnen (Version 14.6 oder neuer).\n2. Meine PCs > Anbindung > „Home Assistant direkt“ einschalten, Adresse und Token eintragen, Speichern.\n3. „Jetzt senden“ – nach wenigen Sekunden hier auf Aktualisieren tippen.", 14f).apply { setPadding(0, Ui.dp(this@MainActivity, 6), 0, Ui.dp(this@MainActivity, 6)) })
-            c.addView(Ui.button(this, "Aktualisieren") { load() })
-            c.addView(Ui.button(this, "Anleitung & FAQ", false) { startActivity(Intent(this, HelpActivity::class.java)) })
-            c.addView(Ui.button(this, "Demo ansehen", false) { Ha.setDemo(this, true); invalidateOptionsMenu(); load() })
+            c.addView(Ui.heading(this, R.drawable.ic_s_wifi, Ui.GREEN, "Verbunden – noch keine PCs", "Home Assistant antwortet, meldet aber noch keinen PC."))
+            val steps = listOf(
+                Triple(R.drawable.ic_s_download, "PC-Tools 14.6 oder neuer", "Auf jedem PC installieren bzw. aktualisieren."),
+                Triple(R.drawable.ic_s_link, "Home Assistant direkt", "Meine PCs > Anbindung: einschalten, Adresse und Token eintragen, Speichern."),
+                Triple(R.drawable.ic_s_send, "Jetzt senden", "Danach hier auf Aktualisieren tippen."))
+            steps.forEachIndexed { i, (ic, t, d) ->
+                c.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, Ui.dp(this@MainActivity, 6), 0, Ui.dp(this@MainActivity, 6))
+                    addView(Ui.tile(this@MainActivity, ic, Ui.BLUE, 34))
+                    addView(LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL; layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                        addView(Ui.text(this@MainActivity, "${i + 1}. $t", 15f, true)); addView(Ui.text(this@MainActivity, d, 13f, col = Ui.MUTED)) })
+                })
+            }
+            c.addView(Ui.button(this, "Aktualisieren", true, R.drawable.ic_s_refresh) { load() })
+            c.addView(Ui.button(this, "Anleitung & FAQ", false, R.drawable.ic_s_book) { startActivity(Intent(this, HelpActivity::class.java)) })
+            c.addView(Ui.button(this, "Demo ansehen", false, R.drawable.ic_s_play) { Ha.setDemo(this, true); invalidateOptionsMenu(); load() })
             list.addView(c)
             return
         }
-        // Zusammenfassung
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        // Zusammenfassung im Kopfbereich
         val help = pcs.count { it.helpOpen }
-        row.addView(Ui.stat(this, pcs.size, "PCs", Ui.TEXT))
-        row.addView(Ui.stat(this, help, "Hilferufe", if (help > 0) 0xFFDC2626.toInt() else Ui.MUTED))
-        row.addView(Ui.stat(this, pcs.count { it.state == "Rot" }, "rot", 0xFFDC2626.toInt()))
-        row.addView(Ui.stat(this, pcs.count { it.state == "Gelb" }, "gelb", 0xFFD97706.toInt()))
-        row.addView(Ui.stat(this, pcs.count { it.state == "Grün" }, "grün", 0xFF16A34A.toInt()))
-        list.addView(row)
+        heroStats.visibility = View.VISIBLE
+        heroStats.addView(Ui.heroStat(this, help, "Hilferufe"))
+        heroStats.addView(Ui.heroStat(this, pcs.count { it.state == "Rot" }, "rot"))
+        heroStats.addView(Ui.heroStat(this, pcs.count { it.state == "Gelb" }, "gelb"))
+        heroStats.addView(Ui.heroStat(this, pcs.count { it.state == "Grün" }, "grün"))
         for (pc in pcs) {
+            val sc = Ui.stateColor(pc.state)
             val card = Ui.card(this)
             val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-            head.addView(Ui.dot(this, pc.state, 22))
+            head.addView(Ui.tile(this, if (pc.helpOpen) R.drawable.ic_s_help else Ui.stateIcon(pc.state), if (pc.helpOpen) Ui.RED else sc, 46, pc.helpOpen || pc.state == "Rot"))
             val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) }
             col.addView(Ui.text(this, pc.name, 18f, true))
-            val sub = buildString {
-                append(when (pc.state) { "Grün" -> "Alles in Ordnung"; "Gelb" -> "Kleinigkeiten offen"; "Rot" -> "Bitte kümmern"; else -> pc.state })
-                if (pc.score >= 0) append(" · Score ${pc.score}")
-                if (pc.problems.isNotEmpty()) append(" · ${pc.problems.size} Hinweis(e)")
-            }
-            col.addView(Ui.text(this, sub, 13f, col = Ui.MUTED))
-            if (pc.updated.isNotBlank()) col.addView(Ui.text(this, "gemeldet " + Ha.nice(pc.updated), 12f, col = Ui.MUTED))
+            val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, Ui.dp(this@MainActivity, 4), 0, 0) }
+            chips.addView(Ui.badge(this, Ui.stateWord(pc.state), sc))
+            if (pc.score >= 0) chips.addView(Ui.badge(this, "Score ${pc.score}", Ui.BLUE), LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { leftMargin = Ui.dp(this@MainActivity, 6) })
+            if (pc.problems.isNotEmpty()) chips.addView(Ui.badge(this, "${pc.problems.size} Hinweis" + (if (pc.problems.size > 1) "e" else ""), Ui.AMBER), LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { leftMargin = Ui.dp(this@MainActivity, 6) })
+            col.addView(chips)
             head.addView(col)
-            head.addView(Ui.text(this, "›", 26f, false, Ui.MUTED))
+            head.addView(Ui.icon(this, R.drawable.ic_s_chev, Ui.MUTED, 22))
             card.addView(head)
-            if (pc.helpOpen) card.addView(Ui.text(this, "Hilferuf " + Ha.nice(pc.helpTime) + (if (pc.helpMessage.isNotBlank()) ": „${pc.helpMessage}“" else ""), 14f, true, 0xFFDC2626.toInt()).apply { setPadding(0, Ui.dp(this@MainActivity, 8), 0, 0) })
-            if (pc.bitlockerLevel == "Error" || pc.bitlocker.contains("nicht gesichert")) card.addView(Ui.text(this, "BitLocker: " + pc.bitlocker, 13f, col = 0xFFB45309.toInt()).apply { setPadding(0, Ui.dp(this@MainActivity, 6), 0, 0) })
+            if (pc.score >= 0) card.addView(Ui.meter(this, pc.score, sc))
+            if (pc.helpOpen) {
+                card.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(Ui.dp(this@MainActivity, 10), Ui.dp(this@MainActivity, 8), Ui.dp(this@MainActivity, 10), Ui.dp(this@MainActivity, 8))
+                    background = android.graphics.drawable.GradientDrawable().apply { setColor(Ui.soft(Ui.RED)); cornerRadius = Ui.dp(this@MainActivity, 10).toFloat() }
+                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = Ui.dp(this@MainActivity, 10) }
+                    addView(Ui.icon(this@MainActivity, R.drawable.ic_s_chat, Ui.RED, 18).apply { (layoutParams as LinearLayout.LayoutParams).rightMargin = Ui.dp(this@MainActivity, 8) })
+                    addView(Ui.text(this@MainActivity, "Hilferuf " + Ha.nice(pc.helpTime) + (if (pc.helpMessage.isNotBlank()) ": „${pc.helpMessage}“" else ""), 14f, true, 0xFF991B1B.toInt()).apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) })
+                })
+            }
+            val foot = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, Ui.dp(this@MainActivity, 8), 0, 0) }
+            foot.addView(Ui.icon(this, R.drawable.ic_s_clock, Ui.MUTED, 14).apply { (layoutParams as LinearLayout.LayoutParams).rightMargin = Ui.dp(this@MainActivity, 5) })
+            foot.addView(Ui.text(this, if (pc.updated.isNotBlank()) "gemeldet " + Ha.nice(pc.updated) else "noch nicht gemeldet", 12f, col = Ui.MUTED).apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) })
+            if (pc.bitlocker.isNotBlank()) {
+                val warn = pc.bitlockerLevel == "Error" || pc.bitlockerLevel == "Warn" || pc.bitlocker.contains("nicht")
+                foot.addView(Ui.icon(this, R.drawable.ic_s_lock, if (warn) Ui.AMBER else Ui.GREEN, 14).apply { (layoutParams as LinearLayout.LayoutParams).rightMargin = Ui.dp(this@MainActivity, 4) })
+                foot.addView(Ui.text(this, if (warn) "BitLocker prüfen" else "BitLocker", 12f, col = if (warn) Ui.AMBER else Ui.MUTED))
+            }
+            card.addView(foot)
+            val out = android.util.TypedValue(); theme.resolveAttribute(android.R.attr.selectableItemBackground, out, true); card.foreground = getDrawable(out.resourceId)
             card.setOnClickListener { startActivity(Intent(this, PcActivity::class.java).putExtra("key", pc.key)) }
             list.addView(card)
         }
@@ -225,11 +262,11 @@ class MainActivity : Activity() {
         if (cached != null && list.childCount == 0) show(cached.first, "") else showTopHints()
         status.text = "Nicht aktualisiert" + (if (cached != null) " · gespeicherter Stand vom " + Ha.niceMillis(cached.second) else "")
         val c = Ui.card(this).apply { background = (background as android.graphics.drawable.GradientDrawable).apply { setColor(0xFFFEF2F2.toInt()); setStroke(Ui.dp(this@MainActivity, 1), 0xFFFECACA.toInt()) } }
-        c.addView(Ui.text(this, t, 17f, true, 0xFF991B1B.toInt()))
+        c.addView(Ui.heading(this, R.drawable.ic_s_alert, Ui.RED, t))
         c.addView(Ui.text(this, m, 14f, col = 0xFF7F1D1D.toInt()).apply { setPadding(0, Ui.dp(this@MainActivity, 4), 0, Ui.dp(this@MainActivity, 6)) })
-        c.addView(Ui.button(this, "Erneut versuchen") { load() })
-        c.addView(Ui.button(this, "Einstellungen", false) { openSettings() })
-        c.addView(Ui.button(this, "Hilfe & FAQ", false) { startActivity(Intent(this, HelpActivity::class.java)) })
+        c.addView(Ui.button(this, "Erneut versuchen", true, R.drawable.ic_s_refresh) { load() })
+        c.addView(Ui.button(this, "Einstellungen", false, R.drawable.ic_s_cog) { openSettings() })
+        c.addView(Ui.button(this, "Hilfe & FAQ", false, R.drawable.ic_s_book) { startActivity(Intent(this, HelpActivity::class.java)) })
         top.addView(c, 0)
     }
 }

@@ -15,25 +15,33 @@ class HelpActivity : Activity() {
         actionBar?.setDisplayHomeAsUpEnabled(true)
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Ui.BG); val p = Ui.dp(this@HelpActivity, 14); setPadding(p, p, p, p) }
 
+        root.addView(Ui.hero(this, R.drawable.ic_s_book, "Hilfe & FAQ", "Einrichtung in 4 Schritten und Antworten auf häufige Fragen"))
         val g = Ui.card(this)
-        g.addView(Ui.text(this, "So richtest du alles ein", 18f, true))
-        g.addView(Ui.text(this,
-            "1. Auf jedem PC PC-Tools 14.6 oder neuer installieren (kostenlos, rhedv42-sudo.github.io/pc-tools).\n\n" +
-            "2. In PC-Tools: Meine PCs > Anbindung > „Home Assistant direkt“ einschalten. Adresse deines Home Assistant und ein Zugangstoken eintragen, Speichern. Für Aufträge zusätzlich „Aufträge aus Home Assistant bzw. der Android-App annehmen“ anhaken.\n\n" +
-            "3. Für die App in Home Assistant ein eigenes Zugangstoken erstellen: unten links auf deinen Namen > Sicherheit > Langlebige Zugangstoken > Token erstellen. Am sichersten mit einem eigenen Benutzer ohne Administratorrechte (z.B. „pctools-app“) – dann zusätzlich unter Einstellungen > Geräte & Dienste > Helfer einen Text-Helfer „pctools_auftrag“ (max. Länge 255) anlegen.\n\n" +
-            "4. In der App unter Einstellungen die Adresse (zu Hause z.B. http://192.168.1.10:8123, unterwegs https://….ui.nabu.casa) und das Token eintragen – fertig.",
-            14f).apply { setPadding(0, Ui.dp(this@HelpActivity, 8), 0, 0) })
+        g.addView(Ui.heading(this, R.drawable.ic_s_checkcircle, Ui.GREEN, "So richtest du alles ein"))
+        val steps = listOf(
+            Triple(R.drawable.ic_s_windows, "PC-Tools installieren", "Auf jedem PC PC-Tools 14.6 oder neuer installieren (kostenlos, rhedv42-sudo.github.io/pc-tools)."),
+            Triple(R.drawable.ic_s_link, "PCs mit Home Assistant verbinden", "In PC-Tools: Meine PCs > Anbindung > „Home Assistant direkt“ einschalten, Adresse und Zugangstoken eintragen, Speichern. Für Aufträge zusätzlich „Aufträge aus Home Assistant bzw. der Android-App annehmen“ anhaken."),
+            Triple(R.drawable.ic_s_key, "Token für die App erstellen", "In Home Assistant unten links auf deinen Namen > Sicherheit > Langlebige Zugangstoken > Token erstellen. Am sichersten mit eigenem Benutzer ohne Administratorrechte (z.B. „pctools-app“) – dann zusätzlich unter Einstellungen > Geräte & Dienste > Helfer einen Text-Helfer „pctools_auftrag“ (max. Länge 255) anlegen."),
+            Triple(R.drawable.ic_s_phone, "App verbinden", "In der App unter Einstellungen die Adresse (zu Hause z.B. http://192.168.1.10:8123, unterwegs https://….ui.nabu.casa) und das Token eintragen – fertig."))
+        steps.forEachIndexed { i, (ic, t, d) ->
+            g.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; setPadding(0, Ui.dp(this@HelpActivity, 6), 0, Ui.dp(this@HelpActivity, 6))
+                addView(Ui.tile(this@HelpActivity, ic, Ui.BLUE, 36, true).apply { (layoutParams as LinearLayout.LayoutParams).gravity = android.view.Gravity.TOP })
+                addView(LinearLayout(this@HelpActivity).apply { orientation = LinearLayout.VERTICAL; layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                    addView(Ui.text(this@HelpActivity, "${i + 1}. $t", 15f, true)); addView(Ui.text(this@HelpActivity, d, 13f, col = Ui.MUTED)) })
+            })
+        }
         root.addView(g)
 
         root.addView(Ui.text(this, "Häufige Fragen", 18f, true).apply { setPadding(Ui.dp(this@HelpActivity, 2), Ui.dp(this@HelpActivity, 6), 0, Ui.dp(this@HelpActivity, 8)) })
-        for ((q, a) in FAQ) root.addView(faq(q, a))
+        FAQ.forEachIndexed { i, (q, a) -> root.addView(faq(ICONS.getOrElse(i) { R.drawable.ic_s_info }, q, a)) }
 
         val l = Ui.card(this)
-        l.addView(Ui.text(this, "Noch Fragen?", 16f, true))
-        l.addView(Ui.button(this, "Frage stellen oder Idee teilen") { Ui.open(this, "https://github.com/rhedv42-sudo/pc-tools/discussions") })
-        l.addView(Ui.button(this, "Fehler melden", false) { Ui.open(this, "https://github.com/rhedv42-sudo/pc-tools/issues/new/choose") })
-        l.addView(Ui.button(this, "Diagnose kopieren (für Fehlermeldungen)", false) { Ui.copy(this, "PC-Tools-App Diagnose", Diag.report(this)) })
-        l.addView(Ui.button(this, "Webseite von PC-Tools", false) { Ui.open(this, "https://rhedv42-sudo.github.io/pc-tools/") })
+        l.addView(Ui.heading(this, R.drawable.ic_s_chat, Ui.PURPLE, "Noch Fragen?"))
+        l.addView(Ui.navRow(this, R.drawable.ic_s_chat, Ui.BLUE, "Frage stellen oder Idee teilen", "GitHub-Diskussionen") { Ui.open(this, "https://github.com/rhedv42-sudo/pc-tools/discussions") })
+        l.addView(Ui.navRow(this, R.drawable.ic_s_bug, Ui.RED, "Fehler melden", "GitHub-Issues") { Ui.open(this, "https://github.com/rhedv42-sudo/pc-tools/issues/new/choose") })
+        l.addView(Ui.navRow(this, R.drawable.ic_s_report, 0xFF475569.toInt(), "Diagnose kopieren", "Für Fehlermeldungen – ohne Token und Adresse") { Ui.copy(this, "PC-Tools-App Diagnose", Diag.report(this)) })
+        l.addView(Ui.navRow(this, R.drawable.ic_s_globe, Ui.GREEN, "Webseite von PC-Tools", "rhedv42-sudo.github.io/pc-tools") { Ui.open(this, "https://rhedv42-sudo.github.io/pc-tools/") })
         root.addView(l)
         setContentView(Ui.screen(this, root))
     }
@@ -43,20 +51,25 @@ class HelpActivity : Activity() {
         return super.onOptionsItemSelected(item)
     }
 
-    private fun faq(q: String, a: String): LinearLayout {
+    private fun faq(ic: Int, q: String, a: String): LinearLayout {
         val c = Ui.card(this)
-        val head = Ui.text(this, "＋  $q", 15f, true)
-        val body = Ui.text(this, a, 14f, col = Ui.MUTED).apply { visibility = View.GONE; setPadding(0, Ui.dp(this@HelpActivity, 8), 0, 0) }
-        c.addView(head); c.addView(body)
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL }
+        row.addView(Ui.tile(this, ic, Ui.BLUE, 34))
+        row.addView(Ui.text(this, q, 15f, true).apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) })
+        val arrow = Ui.icon(this, R.drawable.ic_s_chev, Ui.MUTED, 20).apply { rotation = 90f }
+        row.addView(arrow)
+        val body = Ui.text(this, a, 14f, col = 0xFF475569.toInt()).apply { visibility = View.GONE; setPadding(Ui.dp(this@HelpActivity, 46), Ui.dp(this@HelpActivity, 8), 0, 0); setLineSpacing(0f, 1.15f) }
+        c.addView(row); c.addView(body)
         c.setOnClickListener {
             val open = body.visibility != View.VISIBLE
             body.visibility = if (open) View.VISIBLE else View.GONE
-            head.text = (if (open) "－  " else "＋  ") + q
+            arrow.animate().rotation(if (open) 270f else 90f).setDuration(150).start()
         }
         return c
     }
 
     companion object {
+        val ICONS = listOf(R.drawable.ic_s_pcs, R.drawable.ic_s_checkcircle, R.drawable.ic_s_help, R.drawable.ic_s_send, R.drawable.ic_s_bell, R.drawable.ic_s_phone, R.drawable.ic_s_finger, R.drawable.ic_s_wifi, R.drawable.ic_s_key, R.drawable.ic_s_shield, R.drawable.ic_s_alert, R.drawable.ic_s_globe, R.drawable.ic_s_lock, R.drawable.ic_s_star, R.drawable.ic_s_download, R.drawable.ic_s_bug)
         val FAQ = listOf(
             "Warum sehe ich keine PCs?" to "Die PCs melden sich nur, wenn in PC-Tools unter Meine PCs > Anbindung „Home Assistant direkt“ eingeschaltet ist (PC-Tools 14.6 oder neuer). In Home Assistant heißen sie sensor.pcpflege_<pc-name>_zustand. Nach dem Einschalten am PC auf „Jetzt senden“ klicken und hier auf Aktualisieren tippen.",
             "Was bedeuten Grün, Gelb, Rot und der Score?" to "Grün: alles in Ordnung. Gelb: Kleinigkeiten, z.B. ein offenes Update. Rot: bitte kümmern, z.B. Virenschutz aus, Sicherung sehr alt oder kaum Speicher frei. Der Score (0–100) fasst alles in einer Zahl zusammen – je höher, desto besser.",

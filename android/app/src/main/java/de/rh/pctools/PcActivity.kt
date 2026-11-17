@@ -4,6 +4,8 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.os.Bundle
+import android.view.Gravity
+import android.view.View
 import android.view.Menu
 import android.view.MenuItem
 import android.widget.LinearLayout
@@ -55,61 +57,107 @@ class PcActivity : Activity() {
         }.start()
     }
 
+    private fun jobIcon(a: String) = when (a) {
+        "Status" -> R.drawable.ic_s_report; "Pflege" -> R.drawable.ic_s_wrench; "Updates" -> R.drawable.ic_s_refresh
+        "Aufraeumen" -> R.drawable.ic_s_clean; "Virenscan" -> R.drawable.ic_s_virus; "Sicherung" -> R.drawable.ic_s_save
+        "Selbstupdate" -> R.drawable.ic_s_download; else -> R.drawable.ic_s_bolt
+    }
+    private fun jobColor(a: String) = when (a) {
+        "Pflege" -> Ui.BLUE; "Updates" -> Ui.GREEN; "Aufraeumen" -> 0xFF0891B2.toInt(); "Virenscan" -> 0xFF0F766E.toInt()
+        "Sicherung" -> 0xFFDB2777.toInt(); "Selbstupdate" -> Ui.PURPLE; else -> 0xFF475569.toInt()
+    }
+
     private fun show(pc: Pc?, job: Job?) {
         root.removeAllViews()
-        if (pc == null) { root.addView(Ui.text(this, "PC nicht gefunden.")); return }
+        if (pc == null) {
+            val c = Ui.card(this); c.addView(Ui.heading(this, R.drawable.ic_s_alert, Ui.AMBER, "PC nicht gefunden", "Er meldet sich gerade nicht in Home Assistant.")); root.addView(c); return
+        }
         title = pc.name
-        // Ampel
-        val head = Ui.card(this)
-        val hr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        hr.addView(Ui.dot(this, pc.state, 40))
-        val hc = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        hc.addView(Ui.text(this, when (pc.state) { "Grün" -> "Alles in Ordnung"; "Gelb" -> "Ein paar Kleinigkeiten"; "Rot" -> "Bitte kümmern"; else -> pc.state }, 20f, true))
-        hc.addView(Ui.text(this, (if (pc.score >= 0) "Zustands-Score ${pc.score} von 100 · " else "") + "gemeldet " + Ha.nice(pc.updated), 13f, col = Ui.MUTED))
-        hr.addView(hc); head.addView(hr)
-        root.addView(head)
+        val sc = Ui.stateColor(pc.state)
+        // Kopfbereich
+        val hero = Ui.hero(this, Ui.stateIcon(pc.state), Ui.stateWord(pc.state), (if (pc.score >= 0) "Zustands-Score ${pc.score} von 100 · " else "") + "gemeldet " + Ha.nice(pc.updated))
+        hero.background = android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+            when (pc.state) { "Rot" -> intArrayOf(0xFFB91C1C.toInt(), 0xFFDC2626.toInt(), 0xFFEA580C.toInt()); "Gelb" -> intArrayOf(0xFFB45309.toInt(), 0xFFD97706.toInt(), 0xFFF59E0B.toInt()); "Grün" -> intArrayOf(0xFF15803D.toInt(), 0xFF16A34A.toInt(), 0xFF0D9488.toInt()); else -> intArrayOf(Ui.BLUE, Ui.PURPLE) }
+        ).apply { cornerRadius = Ui.dp(this@PcActivity, 18).toFloat() }
+        if (pc.score >= 0) hero.addView(android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100; progress = pc.score; progressTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.WHITE)
+            progressBackgroundTintList = android.content.res.ColorStateList.valueOf(0x55FFFFFF)
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(this@PcActivity, 8)).apply { topMargin = Ui.dp(this@PcActivity, 14) }
+        })
+        root.addView(hero)
 
         // Hilferuf
         if (pc.helpOpen) {
-            val c = Ui.card(this)
-            c.addView(Ui.text(this, "🆘 Hilferuf vom " + Ha.nice(pc.helpTime), 17f, true, 0xFFDC2626.toInt()))
-            if (pc.helpMessage.isNotBlank()) c.addView(Ui.text(this, "„${pc.helpMessage}“", 16f).apply { setPadding(0, Ui.dp(this@PcActivity, 6), 0, Ui.dp(this@PcActivity, 6)) })
-            if (pc.helpReport.isNotBlank()) c.addView(Ui.button(this, "Bericht anzeigen", false) {
+            val c = Ui.card(this).apply { background = (background as android.graphics.drawable.GradientDrawable).apply { setColor(0xFFFEF2F2.toInt()); setStroke(Ui.dp(this@PcActivity, 1), 0xFFFECACA.toInt()) } }
+            c.addView(Ui.heading(this, R.drawable.ic_s_help, Ui.RED, "Hilferuf", "vom " + Ha.nice(pc.helpTime)))
+            if (pc.helpMessage.isNotBlank()) c.addView(Ui.text(this, "„${pc.helpMessage}“", 16f, false, 0xFF7F1D1D.toInt()).apply { setPadding(0, 0, 0, Ui.dp(this@PcActivity, 6)) })
+            if (pc.helpReport.isNotBlank()) c.addView(Ui.button(this, "Bericht anzeigen", true, R.drawable.ic_s_report) {
                 AlertDialog.Builder(this).setTitle("Hilferuf ${pc.name}").setMessage(pc.helpReport).setPositiveButton("OK", null).show()
             })
             root.addView(c)
         }
 
-        // Probleme
+        // Hinweise
         if (pc.problems.isNotEmpty()) {
             val c = Ui.card(this)
-            c.addView(Ui.text(this, "Hinweise", 16f, true))
-            for (p in pc.problems) c.addView(Ui.text(this, "• $p", 14f).apply { setPadding(0, Ui.dp(this@PcActivity, 4), 0, 0) })
+            c.addView(Ui.heading(this, R.drawable.ic_s_alert, Ui.AMBER, "Hinweise", "${pc.problems.size} offene Punkte"))
+            for (p in pc.problems) c.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, Ui.dp(this@PcActivity, 4), 0, Ui.dp(this@PcActivity, 4))
+                addView(View(this@PcActivity).apply { background = android.graphics.drawable.GradientDrawable().apply { shape = android.graphics.drawable.GradientDrawable.OVAL; setColor(sc) }; layoutParams = LinearLayout.LayoutParams(Ui.dp(this@PcActivity, 8), Ui.dp(this@PcActivity, 8)).apply { rightMargin = Ui.dp(this@PcActivity, 10) } })
+                addView(Ui.text(this@PcActivity, p, 14f).apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) })
+            })
             root.addView(c)
         }
 
         // Aufträge
         val jc = Ui.card(this)
-        jc.addView(Ui.text(this, "Aufträge an diesen PC", 16f, true))
+        jc.addView(Ui.heading(this, R.drawable.ic_s_send, Ui.BLUE, "Aufträge an diesen PC", if (pc.jobsEnabled) "Der PC schaut alle 10 Minuten nach." else null))
         if (job != null && job.state.isNotBlank() && job.state != "unknown") {
-            jc.addView(Ui.text(this, "Letzter Auftrag: ${Ha.jobLabel(job.action)} – ${job.state}" + (if (job.message.isNotBlank()) " (${job.message})" else "") + " · " + Ha.nice(job.time), 13f, col = Ui.MUTED).apply { setPadding(0, Ui.dp(this@PcActivity, 4), 0, Ui.dp(this@PcActivity, 6)) })
+            val jcCol = when (job.state) { "erledigt" -> Ui.GREEN; "Fehler", "abgelehnt" -> Ui.RED; else -> Ui.AMBER }
+            jc.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, 0, 0, Ui.dp(this@PcActivity, 8))
+                addView(Ui.badge(this@PcActivity, job.state, jcCol))
+                addView(Ui.text(this@PcActivity, "  ${Ha.jobLabel(job.action)}" + (if (job.message.isNotBlank()) " – ${job.message}" else "") + " · " + Ha.nice(job.time), 13f, col = Ui.MUTED).apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) })
+            })
         }
         if (!pc.jobsEnabled) {
             jc.addView(Ui.text(this, "Auf dem PC in PC-Tools einschalten: Meine PCs > Anbindung > „Aufträge aus Home Assistant bzw. der Android-App annehmen“.", 13f, col = Ui.MUTED))
         } else {
-            jc.addView(Ui.text(this, "Der PC prüft alle 10 Minuten, ob ein Auftrag da ist.", 13f, col = Ui.MUTED))
-            for (a in pc.jobs.ifEmpty { listOf("Status", "Pflege", "Updates", "Aufraeumen", "Virenscan", "Sicherung", "Selbstupdate") }) {
-                jc.addView(Ui.button(this, Ha.jobLabel(a), a == "Pflege") { confirm(pc, a) })
+            val acts = pc.jobs.ifEmpty { listOf("Status", "Pflege", "Updates", "Aufraeumen", "Virenscan", "Sicherung", "Selbstupdate") }
+            if ("Pflege" in acts) jc.addView(Ui.button(this, Ha.jobLabel("Pflege"), true, R.drawable.ic_s_wrench) { confirm(pc, "Pflege") })
+            // übrige Aufträge als zweispaltiges Raster aus Kacheln
+            val rest = acts.filter { it != "Pflege" }
+            var row: LinearLayout? = null
+            rest.forEachIndexed { i, a ->
+                if (i % 2 == 0) { row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; jc.addView(row) }
+                row!!.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
+                    val p = Ui.dp(this@PcActivity, 10); setPadding(p, Ui.dp(this@PcActivity, 12), p, Ui.dp(this@PcActivity, 12))
+                    background = android.graphics.drawable.GradientDrawable().apply { setColor(Ui.soft(jobColor(a))); cornerRadius = Ui.dp(this@PcActivity, 14).toFloat() }
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(Ui.dp(this@PcActivity, 4), Ui.dp(this@PcActivity, 4), Ui.dp(this@PcActivity, 4), Ui.dp(this@PcActivity, 4)) }
+                    addView(Ui.icon(this@PcActivity, jobIcon(a), jobColor(a), 26))
+                    addView(Ui.text(this@PcActivity, Ha.jobLabel(a), 13f, true, jobColor(a)).apply { gravity = Gravity.CENTER; setPadding(0, Ui.dp(this@PcActivity, 6), 0, 0) })
+                    isClickable = true; setOnClickListener { confirm(pc, a) }
+                })
+                if (i == rest.size - 1 && i % 2 == 0) row!!.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f).apply { setMargins(Ui.dp(this@PcActivity, 4), 0, Ui.dp(this@PcActivity, 4), 0) } })
             }
         }
         root.addView(jc)
 
         // Details
         val dc = Ui.card(this)
-        dc.addView(Ui.text(this, "Details", 16f, true))
-        fun r(l: String, v: String) { if (v.isNotBlank()) dc.addView(Ui.row(this, l, v)) }
-        r("Modell", pc.model); r("Windows", pc.windows); r("Speicher C:", pc.diskFree); r("Läuft seit", pc.uptime)
-        r("Letzte Pflege", pc.lastRun); r("Neustart", if (pc.rebootPending) "ausstehend" else ""); r("BitLocker", pc.bitlocker); r("BIOS", pc.bios); r("PC-Tools", pc.version)
+        dc.addView(Ui.heading(this, R.drawable.ic_s_info, 0xFF475569.toInt(), "Details"))
+        fun r(ic: Int, l: String, v: String) {
+            if (v.isBlank()) return
+            dc.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, Ui.dp(this@PcActivity, 5), 0, Ui.dp(this@PcActivity, 5))
+                addView(Ui.icon(this@PcActivity, ic, Ui.MUTED, 18).apply { (layoutParams as LinearLayout.LayoutParams).rightMargin = Ui.dp(this@PcActivity, 10) })
+                addView(Ui.text(this@PcActivity, l, 13f, true, Ui.MUTED).apply { layoutParams = LinearLayout.LayoutParams(Ui.dp(this@PcActivity, 108), LinearLayout.LayoutParams.WRAP_CONTENT) })
+                addView(Ui.text(this@PcActivity, v, 14f).apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) })
+            })
+        }
+        r(R.drawable.ic_s_pcs, "Modell", pc.model); r(R.drawable.ic_s_windows, "Windows", pc.windows); r(R.drawable.ic_s_disk, "Speicher C:", pc.diskFree); r(R.drawable.ic_s_clock, "Läuft seit", pc.uptime)
+        r(R.drawable.ic_s_wrench, "Letzte Pflege", pc.lastRun); r(R.drawable.ic_s_refresh, "Neustart", if (pc.rebootPending) "ausstehend" else ""); r(R.drawable.ic_s_lock, "BitLocker", pc.bitlocker); r(R.drawable.ic_s_chip, "BIOS", pc.bios); r(R.drawable.ic_s_bolt, "PC-Tools", pc.version)
         root.addView(dc)
     }
 
