@@ -3,6 +3,7 @@
 mkdir -p starttest
 APK=android/app/build/outputs/apk/release/app-release.apk
 adb install -r "$APK" || exit 1
+adb shell pm grant de.rh.pctools android.permission.POST_NOTIFICATIONS 2>/dev/null || true
 adb logcat -c
 adb shell am start -W -n de.rh.pctools/.MainActivity
 sleep 12
