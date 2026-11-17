@@ -67,6 +67,10 @@ jobs:
           if (-not $iscc) { choco install innosetup -y --no-progress | Out-Null; $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1 }
           & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" "/DSrcDir=$PWD" "/DOutDir=$PWD\dist" installer\PC-Tools.iss
           if ($LASTEXITCODE -ne 0) { throw 'Inno Setup fehlgeschlagen' }
+          # Fester Name für Download-Portale: .../releases/latest/download/PC-Tools-Setup.exe
+          Copy-Item "dist\PC-Tools-Setup-${{ steps.ver.outputs.version }}.exe" "dist\PC-Tools-Setup.exe" -Force
+          $h = (Get-FileHash "dist\PC-Tools-Setup-${{ steps.ver.outputs.version }}.exe" -Algorithm SHA256).Hash
+          "::notice::SHA256 PC-Tools-Setup-${{ steps.ver.outputs.version }}.exe = $h"
 
 
       - name: GitHub Release erstellen
