@@ -82,5 +82,5 @@ class CheckJob : JobService() {
 }
 
 class BootReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) { CheckJob.schedule(context) }
+    override fun onReceive(context: Context, intent: Intent) { try { CheckJob.schedule(context) } catch (_: Exception) { } }
 }

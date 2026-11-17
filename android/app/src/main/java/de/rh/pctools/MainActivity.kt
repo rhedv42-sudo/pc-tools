@@ -27,7 +27,7 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
-        CheckJob.schedule(this)
+        try { CheckJob.schedule(this) } catch (e: Exception) { android.widget.Toast.makeText(this, "Hintergrund-Prüfung nicht möglich: " + (e.message ?: e.toString()), android.widget.Toast.LENGTH_LONG).show() }
         Ha.prefs(this).getString("crash", null)?.let { c ->
             Ha.prefs(this).edit().remove("crash").apply()
             android.app.AlertDialog.Builder(this).setTitle("Die App ist zuletzt abgestürzt")
