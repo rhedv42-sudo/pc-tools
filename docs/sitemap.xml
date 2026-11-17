@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+ <url><loc>https://rhedv42-sudo.github.io/pc-tools/</loc><lastmod>2026-11-17</lastmod>
+  <image:image><image:loc>https://rhedv42-sudo.github.io/pc-tools/img/uebersicht.webp</image:loc></image:image>
+  <image:image><image:loc>https://rhedv42-sudo.github.io/pc-tools/img/einfach.webp</image:loc></image:image>
+  <image:image><image:loc>https://rhedv42-sudo.github.io/pc-tools/img/hilfe.webp</image:loc></image:image>
+  <image:image><image:loc>https://rhedv42-sudo.github.io/pc-tools/img/meine-pcs.webp</image:loc></image:image>
+  <image:image><image:loc>https://rhedv42-sudo.github.io/pc-tools/img/android.webp</image:loc></image:image>
+  <image:image><image:loc>https://rhedv42-sudo.github.io/pc-tools/img/bitlocker.webp</image:loc></image:image>
+  <image:image><image:loc>https://rhedv42-sudo.github.io/pc-tools/img/bitlocker-pdf.webp</image:loc></image:image>
+ </url>
+ <url><loc>https://rhedv42-sudo.github.io/pc-tools/llms.txt</loc><lastmod>2026-11-17</lastmod></url>
+</urlset>

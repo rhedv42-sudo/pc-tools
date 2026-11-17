@@ -1,0 +1,57 @@
+# PC-Tools
+
+> PC-Tools (auch „PC-Tools by RH“, früher „PCPflege“) ist ein kostenloses Open-Source-Wartungswerkzeug für Windows 10/11 und Windows Server, mit Paketen für Linux. Es bündelt Updates, Treiber- und BIOS-Prüfung, Aufräumen, einen Zustands-Score mit Ein-Klick-Reparatur, Sicherheitsprüfung, Datensicherung, einen BitLocker-Assistenten und Fernhilfe für Familie und Freunde. Lizenz: Apache 2.0. Keine Telemetrie, keine Werbung, kein Abo. 12 Sprachen. Entwickler: René Hütt.
+
+- Webseite: https://rhedv42-sudo.github.io/pc-tools/
+- Quelltext: https://github.com/rhedv42-sudo/pc-tools
+- Download (neueste Version, Setup-EXE, ZIP, portabel, Lite, Linux): https://github.com/rhedv42-sudo/pc-tools/releases/latest
+- Android-App (APK, Releases mit Tag „android-v…“): https://github.com/rhedv42-sudo/pc-tools/releases
+- Fragen und Ideen: https://github.com/rhedv42-sudo/pc-tools/discussions
+- Fehler melden: https://github.com/rhedv42-sudo/pc-tools/issues
+- Datenschutz: https://github.com/rhedv42-sudo/pc-tools/blob/main/DATENSCHUTZ.md
+
+## Für wen
+
+- Einsteiger, Eltern und Großeltern: Einfach-Modus mit einer großen Ampel und zwei Knöpfen („Alles reparieren“, „Hilfe holen“).
+- Familien-Helfer: „Meine PCs“ zeigt alle PCs der Familie mit Ampel, Score, Hilferufen und BitLocker-/Sicherungsstand und schickt Aufträge (Pflege, Updates, Aufräumen, Virenscan, Sicherung, Zustand melden, PC-Tools aktualisieren).
+- Fortgeschrittene und kleine Firmen: Vollversion mit über 40 Seiten Werkzeugen (Task-Manager, Server-Tools, Netzwerk-Dokumentation, Windows-Reparatur, PC-Umzug, automatische Installation).
+
+## Funktionen
+
+- Zustands-Score 0–100 mit Ampel; „Punkte beheben“ erledigt automatisch, was sicher geht, und erklärt den Rest.
+- Updates: Windows Update, Programme über winget, Microsoft Store, Treiber (Windows Update und Hersteller-Pakete von Lenovo, HP, Dell), tägliche BIOS-Prüfung gegen den Hersteller-Katalog.
+- Aufräumen und Optimieren: temporäre Dateien, Update-Reste, WinSxS, alte Treiber, Laufwerke optimieren/TRIM, Autostart, Startzeit-Analyse. Persönliche Ordner werden nie angefasst.
+- Sicherheit: Virenschutz, Firewall, Secure Boot, TPM, Sicherheitslücken in installierter Software, Netzwerk-Scan nur in privaten Adressbereichen.
+- Passwort-Check gegen bekannte Datenlecks (Have I Been Pwned, k-Anonymität: nur 5 Zeichen des SHA-1-Hashs verlassen den PC).
+- BitLocker-Assistent: prüft, verschlüsselt, repariert den Schutz (TPM oder Start-Passwort), sichert den Wiederherstellungsschlüssel an mehreren Orten (USB, OneDrive, Google Drive, Dropbox, Nextcloud, iCloud, Ordner/NAS, Ausdruck) und als ausführliche PDF; setzt BitLocker vor BIOS-Änderungen automatisch aus.
+- Datensicherung (Dateien) und Komplettsicherung (Systemabbild) auf USB oder NAS mit Zeitplan und Kontrolle.
+- Hilfe holen: ein Klick schickt dem Helfer einen Bericht (Zustand, Probleme, Fehler, Protokoll – keine Passwörter oder Dateien) über Meine PCs, Home Assistant/Handy oder E-Mail.
+- Integration: Home Assistant (MQTT oder REST), Android-App mit App-Sperre (Fingerabdruck/PIN), Fernaufträge mit Freigabeliste.
+- KI-Assistent (optional): erklärt Fehlermeldungen, Bluescreens und Ereignisse; lokal mit Ollama oder mit einem Anbieter nach Wahl.
+- Sprachen: Deutsch, Englisch, Spanisch, Französisch, Italienisch, Portugiesisch (Brasilien), Polnisch, Türkisch, Russisch, Chinesisch (vereinfacht), Japanisch, Koreanisch.
+
+## Installation
+
+1. Auf der Download-Seite PC-Tools-Setup-<Version>.exe laden (oder die portable ZIP).
+2. Setup starten. Zeigt Windows SmartScreen „Der Computer wurde durch Windows geschützt“: „Weitere Informationen“ → „Trotzdem ausführen“ (noch keine kostenpflichtige Code-Signatur; jede Version wird öffentlich per GitHub Actions aus dem Quelltext gebaut).
+3. Sprache und Lite- oder Vollversion wählen, dann „Alles automatisch“ – danach pflegt ein Zeitplan den PC von selbst. PC-Tools aktualisiert sich selbst.
+
+## Technik
+
+- Eine einzige PowerShell-5.1-Skriptdatei (PCPflege.ps1) mit WPF-Oberfläche, Starter PC-Tools.exe, Installer (Inno Setup).
+- Daten unter C:\ProgramData\PCPflege; Zugangsdaten verschlüsselt mit Windows DPAPI.
+- Änderungen werden angezeigt bzw. bestätigt; vorher Wiederherstellungspunkt, Registry-Sicherung oder Papierkorb.
+
+## Bilder
+
+- Übersicht: https://rhedv42-sudo.github.io/pc-tools/img/uebersicht.webp
+- Einfach-Modus: https://rhedv42-sudo.github.io/pc-tools/img/einfach.webp
+- Hilfe holen: https://rhedv42-sudo.github.io/pc-tools/img/hilfe.webp
+- Meine PCs: https://rhedv42-sudo.github.io/pc-tools/img/meine-pcs.webp
+- Android-App: https://rhedv42-sudo.github.io/pc-tools/img/android.webp
+- BitLocker-Assistent: https://rhedv42-sudo.github.io/pc-tools/img/bitlocker.webp
+- BitLocker-Schlüssel-PDF (Beispiel): https://rhedv42-sudo.github.io/pc-tools/img/bitlocker-pdf.webp
+
+## English summary
+
+PC-Tools is a free, open-source (Apache-2.0) all-in-one maintenance tool for Windows 10/11 (and Linux): updates incl. drivers and BIOS checks, cleanup, a 0–100 health score with one-click fixes, security checks, password leak check, backup, a BitLocker assistant with recovery-key PDF, remote family help ("My PCs", Android app via Home Assistant) and a simple mode for beginners. 12 languages, no telemetry, no ads. Download: https://github.com/rhedv42-sudo/pc-tools/releases/latest

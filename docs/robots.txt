@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://rhedv42-sudo.github.io/pc-tools/sitemap.xml

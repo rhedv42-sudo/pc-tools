@@ -7,6 +7,19 @@
 
 **[⬇ Download](https://github.com/rhedv42-sudo/pc-tools/releases/latest)** · **[Webseite](https://rhedv42-sudo.github.io/pc-tools/)** · **[Fragen & Ideen](https://github.com/rhedv42-sudo/pc-tools/discussions)** · Gefällt es dir? Ein ★ hilft anderen, PC-Tools zu finden.
 
+<p align="center"><a href="https://rhedv42-sudo.github.io/pc-tools/#bilder"><img src="docs/img/uebersicht.png" width="820" alt="PC-Tools Übersicht mit Ampel, Zustands-Score und Schnellaktionen"></a></p>
+
+<table><tr>
+<td width="33%"><img src="docs/img/einfach-klein.webp" alt="Einfach-Modus"><br><b>Einfach-Modus</b> – eine Ampel, zwei Knöpfe</td>
+<td width="33%"><img src="docs/img/meine-pcs-klein.webp" alt="Meine PCs"><br><b>Meine PCs</b> – die ganze Familie im Blick</td>
+<td width="33%"><img src="docs/img/bitlocker-klein.webp" alt="BitLocker-Assistent"><br><b>BitLocker-Assistent</b> – Schlüssel sicher, auch als PDF</td>
+</tr><tr>
+<td><img src="docs/img/hilfe-klein.webp" alt="Hilfe holen"><br><b>Hilfe holen</b> – Bericht an den Helfer mit einem Klick</td>
+<td colspan="2"><img src="docs/img/android-klein.webp" alt="Android-App"><br><b>Android-App</b> – Hilferufe und Aufträge über Home Assistant</td>
+</tr></table>
+
+<sub>Abbildungen: nachgebaute Darstellungen der Oberfläche (Version 14.6) mit Beispieldaten.</sub>
+
 Kostenloses, quelloffenes Wartungs- und Diagnosewerkzeug für Windows 10/11 und Windows Server
 (PowerShell + WPF, eine einzige nachvollziehbare Skriptdatei).
 
