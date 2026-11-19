@@ -1,6 +1,8 @@
 # Code signing policy
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+> **Status (November 2026):** Noch nicht in Kraft. Die Dateien sind derzeit unsigniert; ein Antrag bei der
+> [SignPath Foundation](https://signpath.org) für kostenlose Open-Source-Signatur ist geplant. Sobald er erteilt ist, gilt:
+> Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
 
 Signiert werden nur Dateien, die in diesem Repository aus dem Quellcode gebaut werden
 (GitHub Actions, `.github/workflows/release.yml`, `build/Build-Packages.ps1`). Jede Signatur wird einzeln freigegeben.

@@ -68,8 +68,15 @@ Große PowerShell-Skripte mit Systemfunktionen werden manchmal fälschlich gemel
 
 ## Code signing policy
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
-[SignPath Foundation](https://signpath.org). Details: [CODE-SIGNING.md](CODE-SIGNING.md).
+**Stand:** Die Programmdateien sind derzeit **nicht code-signiert** – deshalb warnt Windows SmartScreen beim ersten Start.
+Eine kostenlose Open-Source-Signatur über die [SignPath Foundation](https://signpath.org) ist geplant, aber noch nicht erteilt.
+Jede Version wird öffentlich per GitHub Actions aus diesem Quelltext gebaut. Richtlinie für die spätere Signatur: [CODE-SIGNING.md](CODE-SIGNING.md).
+
+## Wer steckt dahinter
+
+PC-Tools wird von René Hütt ([@rhedv42-sudo](https://github.com/rhedv42-sudo)) entwickelt und betreut – mit KI-Unterstützung
+durch Claude (Anthropic). Ältere Commits stehen unter „Claude“, neuere unter René Hütt mit Claude als Mitautor.
+Jede Version wird vor der Veröffentlichung auf echten PCs geprüft.
 
 ## Mitmachen
 
